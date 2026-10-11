@@ -41,7 +41,11 @@ independent arms of the fixed code agree to 0.04, se ~0.1), wall −0.35..−0.5
 
 `CZ_VK_TEXMEMO=1 CZ_VK_SCOPED_SHARED_ZERO=1` vs without, same binary (`cz_pf`), three runs
 a side: **`cz-draw` 11.06 -> 9.97 (−1.09 ms, se 0.1)**, wall −0.5, Main/Draw unchanged;
-`[texmemo]` 78.7-79.0% served, **0 disagreements**. Part 117 measured −0.56 on the thread
+`[texmemo]` 78.7-79.0% served. **RETRACTED IN PLACE: the "0 disagreements" on that line
+is NOT a verification** — `g_texMemoDisagree` only counts under `CZ_VK_TEXMEMO_VERIFY=1`,
+which no part-122 run set, so it reads 0 by construction (gotcha 151's shape). The
+verification on record is part 109's: 0 over 718 million served lookups, on an older
+build. A verify run on the current build is owed before the flip. Part 117 measured −0.56 on the thread
 and −0.13 on the frame because the Main Thread was the bound then; the thread's saving has
 doubled with the draw count. **Still OFF — the ship decision is the operator's** (part
 109's rule); the recommendation is ON.
@@ -88,8 +92,8 @@ for that reason (kept as `.rejected`). The settings are the operator's choice.
 
 ## §7. What is owed / next
 
-1. The operator's call on the bundle (§2): −1.09 ms on the bound thread, verified, 0
-   disagreements. Flipping it means renaming the arms to `CZ_VK_NO_TEXMEMO` /
+1. The operator's call on the bundle (§2): −1.09 ms on the bound thread. Owed first: one
+   `CZ_VK_TEXMEMO_VERIFY=1` crowd run on the current build (§2's retraction). Flipping it means renaming the arms to `CZ_VK_NO_TEXMEMO` /
    `CZ_VK_FULL_SHARED_ZERO` (the latter already exists as the scoped arm's control).
 2. `cz-draw` is still the bound (~10 ms with the bundle) over Main (8.3-8.5). The
    remaining lever that moves work OFF it: let `cz-pump` (W, ~32% of a core) compute each

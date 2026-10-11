@@ -3767,7 +3767,9 @@ CZ_VK_SCOPED_SHARED_ZERO=1  **an ARM, off by default (part 109).** Zero only the
                   proving nothing. Use `CZ_VK_SCOPED_SHARED_ZERO=1` as the arm.
                   **Part 122 re-measured it WITH `CZ_VK_TEXMEMO=1` at 10,300 draws, where the
                   renderer thread `cz-draw` is the frame's bound: the pair takes cz-draw
-                  11.06 -> 9.97 ms (−1.09, se 0.1), wall −0.5, 0 texmemo disagreements.
+                  11.06 -> 9.97 ms (−1.09, se 0.1), wall −0.5. (The `0 disagreements` those
+                  runs printed is NOT a check — it counts only under
+                  `CZ_VK_TEXMEMO_VERIFY=1`, which they did not set.)
                   Still OFF pending the operator's call (`perf-plan-part122.md` §2).**
 CZ_VK_SHARED_ZERO_POISON=1  **the positive control for the above, and the thing that
                   makes it safe rather than plausible.** Writes 0xFF over exactly the
