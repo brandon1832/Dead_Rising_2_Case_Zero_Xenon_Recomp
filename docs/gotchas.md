@@ -7273,3 +7273,19 @@ From phase C part 18 (the frame rate — and none of it was work):
     scale where the constants are COPIED, not in place, or a constant cache serves it twice.
     (Case Zero, 2026-10-10, open item 0zl; Case West ships the same shadow shaders.)
 
+
+641. **A FIX THAT MOVES A CONSTANT INTO THE COPY CAN STILL READ THE COPY BACK.** Gotcha
+    640's own rule ("scale where the constants are copied") was followed and the scale was
+    still `c[i] *= f` on the copy, which lives in write-combined mapped memory — three
+    uncached reads per pixel-constant copy, ~5% of the renderer thread, −0.6 ms when
+    fixed. Gotchas 446-447 named this class 47 parts earlier; a new site reintroduced it
+    the day it was written. Any read-modify-write on a mapped pointer is the defect: read
+    the SOURCE, write the destination. (Case Zero, part 122, `3e6897b`.)
+
+642. **ON LINUX A "5 us" TIMED NAP SLEEPS ~60 us.** The kernel stretches every timed wait
+    by the thread's timer slack (50 us default): `condition_variable::wait_for(5 us)`
+    measured 58.9 us, `(100 us)` 154 us; `prctl(PR_SET_TIMERSLACK, 1)` brings them to
+    9.7 / 106. Every microsecond-scale backoff ladder written without it is a ~60 us
+    floor. Setting it on the PM4 pump measured a null HERE because the hold it shortens
+    was waiting on the guest, not on the nap — so check what the wait is FOR before
+    buying the slack. (Case Zero, part 122, `perf-plan-part122.md` §4.)
