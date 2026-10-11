@@ -61,6 +61,13 @@ Lines owed to the next release since v1.1.2, collected as they land. Fold them i
   the default is now 0.25; 1.00 is the original game's value. It applies immediately
   (operator-verified 2026-10-10).
 
+## Performance
+
+- **The new SHADOW BIAS setting no longer slows the game down.** Its first version read
+  values back from graphics memory on every shadowed surface, which cost about 0.5 ms a
+  frame in big crowds; it now reads them from main memory. The picture is identical
+  (`3e6897b`, part 122).
+
 ## Install note
 
 - **Some shaders are rebuilt once on first launch** (the shader cache's recipe goes

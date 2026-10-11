@@ -3765,6 +3765,10 @@ CZ_VK_SCOPED_SHARED_ZERO=1  **an ARM, off by default (part 109).** Zero only the
                   other way round and that name is NOT READ ANYWHERE — a recipe carrying
                   it gets the default (full) zero, which is what it wanted, but it is
                   proving nothing. Use `CZ_VK_SCOPED_SHARED_ZERO=1` as the arm.
+                  **Part 122 re-measured it WITH `CZ_VK_TEXMEMO=1` at 10,300 draws, where the
+                  renderer thread `cz-draw` is the frame's bound: the pair takes cz-draw
+                  11.06 -> 9.97 ms (−1.09, se 0.1), wall −0.5, 0 texmemo disagreements.
+                  Still OFF pending the operator's call (`perf-plan-part122.md` §2).**
 CZ_VK_SHARED_ZERO_POISON=1  **the positive control for the above, and the thing that
                   makes it safe rather than plausible.** Writes 0xFF over exactly the
                   bytes the scoped zero skips, so a shader reading one gets a colossal
@@ -3777,6 +3781,8 @@ CZ_VK_TEXMEMO=1   **an ARM, off by default (part 109).** A 32-entry per-fetch-sl
                   decode and the map. 74% served; worth **-0.33 ms**, which missed the
                   same 0.4 ms kill rule. `CZ_VK_TEXMEMO_VERIFY=1` computes both answers
                   and counts disagreements — 0 over 718 million served lookups.
+                  Part 122: see the SCOPED_SHARED_ZERO entry — the pair is −1.09 ms on
+                  cz-draw now that the renderer thread is the bound.
 ```
 
 ```
