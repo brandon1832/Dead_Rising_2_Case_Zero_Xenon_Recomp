@@ -368,6 +368,7 @@ add_executable(cz_runtime
     cpu/havok_threads.cpp            # part 118: the Havok worker count (CZ_HAVOK_WORKERS)
     cpu/rumble_guest.cpp             # part 108: the rumble tick at 30 Hz (CZ_RUMBLE_TICK_HZ) + the probe (CZ_RUMBLE_TRACE)
     cpu/shader_pool.cpp              # 2026-10-12: the shader constant set pool grown for mods (CZ_NO_SHADER_POOL_GROWTH)
+    cpu/zombie_heap.cpp              # 2026-10-13: the Zombie heap +16 MiB from the SW Texture heap, for mods (CZ_NO_ZOMBIE_HEAP_GROWTH)
     kernel/klog.cpp
     kernel/memory.cpp
     kernel/heap.cpp

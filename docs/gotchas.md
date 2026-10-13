@@ -7312,3 +7312,25 @@ From phase C part 18 (the frame rate — and none of it was work):
     `runtime/cpu/shader_pool.cpp`, `docs/instruments.md` §Shader constant set pool; Case
     West: its gotcha 332.)
 
+644. **A FULL HEAP IS NOT A FULL MACHINE: FIND WHICH HEAP, THEN MOVE BYTES BETWEEN HEAPS.**
+    The DR2 CZ/CW modding toolkit's test mod (Case West's gas zombies and a guard, two
+    brought weapons) faulted the street's load at guest `0x1C` right after "Failed to
+    allocate memory!" in `sub_8277E778`, while every pair of those four loaded. The title
+    takes one fixed 448 MiB block at boot (`sub_82496D98`) and carves ~78 named heaps out of
+    it (`sub_8277DD40(base, size, name, parent)`); an allocation names its heap, and on
+    failure `sub_8277DF48(size, heap)` would print `out of memory! heap: = %d "%s"`, but that
+    print goes nowhere. gdb on the headless runtime (`-iex "set libthread-db-search-path
+    /nonexistent"`, a breakpoint on `__imp__sub_8277DF48`, then the title's own
+    `sub_8277C288` / `sub_8277C1A8` called per heap for total / largest free) named it: heap
+    71, the **Zombie heap**, a constant 30,177,280 bytes (`sub_825B7548`), which the street's
+    own zombie types already fill to 1.6 MB, while the SW Texture heap had 45 MB free in
+    play. `runtime/cpu/zombie_heap.cpp` makes the SW Texture heap 16 MiB smaller
+    (`sub_82483860`, its size) and the Zombie heap 16 MiB bigger (its block `sub_8277F0B8`
+    and heap `sub_8277DD40`, only from the return addresses `0x825B76BC` / `0x825B76D4` with
+    the title's size, and only after the texture heap shrank). Measured headless on a copy of
+    the user's save: the same mod loads into play with 16.7 MB of the Zombie heap and 27.2 MB
+    of the SW Texture heap free over 16 samples (14.8 MB at the lowest seen, the ending
+    film); unmodded with `CZ_NO_ZOMBIE_HEAP_GROWTH=1` the Zombie heap keeps 1,586,656
+    bytes free. (Case Zero, 2026-10-13, `docs/instruments.md` §Zombie heap; the toolkit's
+    `docs/formats.md` §Engine memory: the heaps; Case West: its gotcha 333.)
+

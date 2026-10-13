@@ -4035,6 +4035,20 @@ CZ_NO_SHADER_POOL_GROWTH=1  keep the title's pool of shader constant sets, the p
 CZ_SHADER_POOL=N    another size, 1300..65535.
 ```
 
+## Zombie heap (mods' zombie types, 2026-10-13)
+
+```
+CZ_NO_ZOMBIE_HEAP_GROWTH=1  keep the title's Zombie heap (30,177,280 bytes) and SW Texture
+                    heap (200,653,824) sizes (the control). By default
+                    runtime/cpu/zombie_heap.cpp moves 16 MiB from the SW Texture heap
+                    (sub_82483860) to the Zombie heap (sub_8277F0B8 / sub_8277DD40 from
+                    0x825B76BC / 0x825B76D4), so the DR2 CZ/CW modding toolkit's brought
+                    zombie types fit beside the street's own (gotcha 644). Logs
+                    "[zombieheap] SW Texture heap: ... -> ..." once and "[zombieheap]
+                    Zombie heap: 30177280 -> 46954496" once.
+CZ_ZOMBIE_HEAP_GROWTH_MB=N  another amount, 1..64 MiB.
+```
+
 ## Part 99 — subtitle language and the boot-logo skip
 
 ```
