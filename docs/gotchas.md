@@ -7305,7 +7305,10 @@ From phase C part 18 (the frame rate — and none of it was work):
     title boots, and the shaders alone load into gameplay. The word beside it (`0x829ED7EC`,
     420 in the image, also 1300 after boot, pool at renderer +3480) is grown too: Case
     West's matching pool ran out at 14 brought pixel shaders as a failed allocation, not an
-    assert (its gotcha 332). (Case Zero, 2026-10-12,
+    assert (its gotcha 332). A third pool, one per shader DESCRIPTION (`0x829ED7E4`, 128 in
+    the image, 228 after boot, 223 shipped), ran out with Case West's gas zombie (8 brought
+    descriptions): the free list returned -1 in `sub_827D4CD8` and its fallback faulted
+    at guest `0x8` while the title drew; grown the same way (2026-10-13). (Case Zero, 2026-10-12,
     `runtime/cpu/shader_pool.cpp`, `docs/instruments.md` §Shader constant set pool; Case
     West: its gotcha 332.)
 

@@ -34,7 +34,7 @@ extern "C" PPC_FUNC(__imp__sub_827BE658);
 
 namespace
 {
-// The two pools sub_825D37C8 sizes 1300, each read by the builder below. The second one
+// The pools sub_825D37C8 sizes (1300, 1300, 228), each read by the builder below. The second one
 // is grown too because Case West's matching pool (its 0x82A00D2C, 1340) ran out with
 // 14 brought pixel shaders (a failed allocation, a fault reading 0x1C; Case West gotcha
 // 332); here 45 loaded without it, but the two ports stay the same shape.
@@ -47,6 +47,11 @@ struct PoolWord
 constexpr PoolWord kPools[] = {
     {0x829ED7F4, 1300, "shader constant sets (read at 0x827BEF4C, renderer +3492)"},
     {0x829ED7EC, 1300, "the pool read at 0x827BEEB4 (renderer +3480)"},
+    // One per shader DESCRIPTION (.sdo): sub_825D37C8 stores 228 here (the image says
+    // 128) and Case Zero ships 223 descriptions. Case West's gas zombie brings 8: the
+    // free list sub_8243FE40 returned -1 in sub_827D4CD8 and its fallback faulted at
+    // guest 0x8 while the title drew (2026-10-13). Grown like the others.
+    {0x829ED7E4, 228, "shader descriptions (read at 0x827BEE4C, renderer +3472)"},
 };
 constexpr uint32_t kDefaultGrownSize = 4096;
 
