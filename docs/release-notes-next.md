@@ -67,6 +67,12 @@ Lines owed to the next release since v1.1.2, collected as they land. Fold them i
   values back from graphics memory on every shadowed surface, which cost about 0.5 ms a
   frame in big crowds; it now reads them from main memory. The picture is identical
   (`3e6897b`, part 122).
+- **About 1 ms less work per frame on the renderer thread in big crowds.** Two
+  optimisations that had been tested since v1.0.2 but left switched off are now on:
+  repeated texture lookups are remembered within a frame, and less memory is cleared
+  per draw. Verified against the old path on 267 million texture lookups with zero
+  differences (`1b14044`, part 122). If a texture ever looks frozen or wrong, launch with
+  `CZ_VK_NO_TEXMEMO=1` and report whether it goes away.
 
 ## Install note
 

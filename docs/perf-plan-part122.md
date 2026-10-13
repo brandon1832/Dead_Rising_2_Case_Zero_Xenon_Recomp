@@ -44,11 +44,20 @@ a side: **`cz-draw` 11.06 -> 9.97 (−1.09 ms, se 0.1)**, wall −0.5, Main/Draw
 `[texmemo]` 78.7-79.0% served. **RETRACTED IN PLACE: the "0 disagreements" on that line
 is NOT a verification** — `g_texMemoDisagree` only counts under `CZ_VK_TEXMEMO_VERIFY=1`,
 which no part-122 run set, so it reads 0 by construction (gotcha 151's shape). The
-verification on record is part 109's: 0 over 718 million served lookups, on an older
-build. A verify run on the current build is owed before the flip. Part 117 measured −0.56 on the thread
-and −0.13 on the frame because the Main Thread was the bound then; the thread's saving has
-doubled with the draw count. **Still OFF — the ship decision is the operator's** (part
-109's rule); the recommendation is ON.
+verification on record was part 109's: 0 over 718 million served lookups, on an older
+build. Part 117 measured −0.56 on the thread and −0.13 on the frame because the Main
+Thread was the bound then; the thread's saving has doubled with the draw count.
+
+**§2.1 — VERIFIED AND FLIPPED ON (`1b14044`, the operator's call, 2026-10-11).** On the
+flipped build, the crowd route: `CZ_VK_TEXMEMO_VERIFY=1` read **0 disagreements of
+267,406,653** verified hits, and `CZ_VK_TEXMEMO_VERIFY_POISON=1` (new, `d80fe63`: compare
+against a deliberately wrong slot) read **141,184,658 of 141,184,659** — the counter is
+shown able to fire. The controls are now `CZ_VK_NO_TEXMEMO=1` and
+`CZ_VK_FULL_SHARED_ZERO=1`; both print their state once at boot. Gates on that binary
+(`tools/part117_gates.sh`): part47 ALL CLEAN, E3 +0.8319 (4 of 5 agreed; part 118 read
++0.8415); A5 5 permutation / 0 real; sync validation 0 hazards at 6,249 draws, poison 30;
+truncated 0. **Not run (the machine was needed): gate 5, the 10-minute explorer soak, and
+part47 with both controls set** — §7 item 0.
 
 ## §3. Two nulls, both reverted
 
@@ -90,16 +99,81 @@ ms (78-92 fps), `cz-draw` 9.5-10.3; both at 1.0 (`CZ_WORLD_LOD=0 CZ_CROWD_LOD=0`
 ~2-3 ms a frame (~25% fps) at the crowd.** One 1.0 run failed the route's 8,000-draw gate
 for that reason (kept as `.rejected`). The settings are the operator's choice.
 
-## §7. What is owed / next
+## §7. TO-DO FOR THE NEXT PERFORMANCE PERSON (mirrored as GitHub issue #2)
 
-1. The operator's call on the bundle (§2): −1.09 ms on the bound thread. Owed first: one
-   `CZ_VK_TEXMEMO_VERIFY=1` crowd run on the current build (§2's retraction). Flipping it means renaming the arms to `CZ_VK_NO_TEXMEMO` /
-   `CZ_VK_FULL_SHARED_ZERO` (the latter already exists as the scoped arm's control).
-2. `cz-draw` is still the bound (~10 ms with the bundle) over Main (8.3-8.5). The
-   remaining lever that moves work OFF it: let `cz-pump` (W, ~32% of a core) compute each
-   draw's lookup KEYS (texture memo keys, stream keys, pipeline key hash) from its own
-   register file at the packet and carry them in the `DrawRec`, so `cz-draw` only looks
-   up — and can prefetch draw N+1's slots from keys already in the log. Not built.
-3. The guest-coupled idle (§4): name the guest code that writes `BC739E80`
-   (`CZ_WAIT_CALLERS=1`-style census on the store) before designing anything.
-4. Gates for any of the above before release: `tools/part117_gates.sh`.
+Written 2026-10-13 as a hand-off: someone else may pick up performance from here. Each
+item says what is known, what to measure first, and what would kill it. Read §0 and §5
+first, and `docs/gotchas.md` 446-447, 572, 641-642.
+
+**Where the frame is (bundle on, 2.0 detail defaults, ~10,300-11,000 draws at the
+crowd, 1920x1080, Ryzen 7 5700):** `cz-draw` ~10.0 ms (the bound), guest Main 8.3-8.5,
+guest Draw Thread ~6.4, `cz-pump` ~3.5, GPU 3.8 with fence wait 0.02. So the next
+~1.5 ms comes off `cz-draw`; past that the guest's Main Thread is the bound again
+(part 116 §4.1, part 118 §1) and renderer work stops paying.
+
+**How to measure (the method is half the job here):**
+- Route: `tools/part80_crowdroute.sh` (operator-route replay, 9-11k draws, unattended).
+- Same-binary env arms: `tools/part122_campaign_env.sh <bin> 3 base "new:CZ_FOO=1"`;
+  two binaries: `tools/part122_campaign.sh`. **Three runs an arm, alternated**
+  (noise floor 10-13% at one run, gotcha 229). Print the CPU clock (the scripts do).
+- Read: `tools/part122_fit.py 10300 base="$OUT/crowd_*_base?.log" new="..."` — a linear
+  fit per arm read at one load. **Quote `cz-draw` (the `pump cpu` column) first; the wall
+  median is quantised to 1 ms by the vblank and cannot read sub-ms changes (gotcha 572).**
+- Profile: `perf record -g -p <pid>` for 20 s during the soak, then filter to the
+  `cz-draw` TID. The phase profiler (`CZ_VK_PROFILE`) has misattributed three times;
+  `perf` wins (`tools/phase_vs_perf.py`).
+- Gates before any default changes: `tools/part117_gates.sh` (all five steps).
+- Any new instrument needs its own positive control that is shown to fire (gotcha 30,
+  and §2's retraction for what happens otherwise).
+
+**0. Finish the gates on `1b14044` (cheap, do first).** Gate 5 of
+`tools/part117_gates.sh` (10-minute `CZ_AUTOCHUCK=EXPLORER` soak with
+`CZ_WAIT_TRACE=1`: no crash, no named infinite wait). Then
+`CZ_VK_NO_TEXMEMO=1 CZ_VK_FULL_SHARED_ZERO=1 tools/part47_gates.sh` to say whether E3
++0.8319 vs part 118's +0.8415 is the flip or run-to-run spread (expected: spread; the
+memo verified exact and the scoped zero's poison sat inside the picture null).
+
+**1. Move lookup-key computation off `cz-draw` onto `cz-pump` (the structural lever,
+est. 1-2 ms, not built).** `cz-pump` (the PM4 walk) is ~32% of a core; `cz-draw` is
+96%. Today `cz-draw` reads the replica register file and computes every per-draw key
+itself: texture memo keys (24-byte fetch-constant compares x slots), stream-cache keys
+(FlatCache hash in `UploadStream`, whose probe stalls are ~73% of its self time), the
+pipeline key hash. W already holds the same registers at the packet. Have W compute the
+keys and carry them in the `DrawRec` (`gpu/pump_split.{h,cpp}`), so D only looks up —
+and, with draw N+1's keys already in the log, can prefetch N+1's FlatCache slots while
+drawing N (the prefetch that was a null in §3 was issued at the hash, too late to
+overlap). Risks: the DrawRec grows (it is copied through the ordered queue); keys must
+be computed from exactly the register state D would have seen (the replica is updated
+in stream order — keep it that way). Kill: `cz-draw` −0.4 ms at 10,300 draws or less
+on the fit after three runs an arm.
+
+**2. `cz-draw`'s ~1.0-1.3 ms/frame idle is a wait on the GUEST (§4) — name the writer
+first.** W holds on WAIT_REG_MEM against word `BC739E80`; ~47-60 waits a frame, only
+~10.6 satisfied by our pending store. Before designing anything: find which guest code
+writes that word (a store-site census like `tools/find_field_access.py`, or a
+`CZ_WAIT_CALLERS=1`-style trace on the store) and whether the Draw Thread could be fed
+sooner. If it is the guest's own pacing, this item is closed.
+
+**3. FlatCache as struct-of-slots (untried form, est. ≤0.5 ms).** The stream cache's
+`FlatCache` keeps gens/keys/vals in three separate arrays, so one probe touches three
+cache lines in three places; prefetching them was a null (§3) because the OoO window
+already overlapped the loads. Packing (gen, key, val) into one 64-byte-aligned slot
+makes a probe one line. Cheap to try; measure on the fit, `cz-draw` column.
+
+**4. The remaining `cz-draw` profile, for whoever wants a smaller item** (`perf`, user
+time, part 122, before the bundle): `DoDraw` self 19%, `UploadStream` 13%, the split's
+replay loop + spin 9%, texture lookup ~11% (now mostly memo hits), the const-window copy
+7%, the driver 8%. Re-profile on `1b14044` before picking — the memo moved the texture
+share. **Never read `R->arena.mapped` (write-combined, uncached; gotchas 446-447, 641):
+every read is a DRAM round trip.** Grep any new hot code for loads from the arena.
+
+**5. Known non-items — do not re-buy without new evidence:** FlatCache prefetch at the
+hash (§3); timer slack on the pump (§3/§4, gotcha 642 — true fact, wrong wait); moving
+the shared-block memset to idle cores (part 111, gotcha 551); PGO/ThinLTO/-O3 on `ppc/`
+(part 116); a fourth Havok worker (part 118, gotcha 573); parallel command recording
+(part 80, gotcha 473); vectorising the byte swap (part 109, gotcha 545).
+
+**6. Open elsewhere, owed but not on the Linux crowd frame:** macOS ~40 fps + a freeze
+when idle (`open-items.md` 0zk); the Windows guest-thread clocks read ~0 and the
+six-core/no-SMT pin shapes (part 118 owed list); the detail settings' own price — 2.0
+vs 1.0 is ~2-3 ms a frame (§6), a settings decision rather than a code item.

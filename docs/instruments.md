@@ -3754,23 +3754,18 @@ CZ_VK_PREZERO_POISON=1  **B1's positive control.** The workers write 0xAA where 
                   not what the draw reads, the fast path never engaged, and every number
                   from it is meaningless (gotcha 30).
 
-CZ_VK_SCOPED_SHARED_ZERO=1  **an ARM, off by default (part 109).** Zero only the vfetch
-                  table entries the vertex shader DECLARES instead of the whole
-                  2,192-byte shared block: 1,530 of 1,536 table bytes go unwritten on the
-                  average draw, 69.8% of the block, ~14 MB a frame of write-combined
-                  stores removed. Worth **-0.21 ms** at the crowd, which missed part
-                  109's 0.4 ms kill rule, so it ships OFF and the default is one line
-                  away. `CZ_VK_FULL_SHARED_ZERO=1` was the control while the
-                  scoped zero was the default for one evening; the polarity is now the
-                  other way round and that name is NOT READ ANYWHERE — a recipe carrying
-                  it gets the default (full) zero, which is what it wanted, but it is
-                  proving nothing. Use `CZ_VK_SCOPED_SHARED_ZERO=1` as the arm.
-                  **Part 122 re-measured it WITH `CZ_VK_TEXMEMO=1` at 10,300 draws, where the
-                  renderer thread `cz-draw` is the frame's bound: the pair takes cz-draw
-                  11.06 -> 9.97 ms (−1.09, se 0.1), wall −0.5. (The `0 disagreements` those
-                  runs printed is NOT a check — it counts only under
-                  `CZ_VK_TEXMEMO_VERIFY=1`, which they did not set.)
-                  Still OFF pending the operator's call (`perf-plan-part122.md` §2).**
+CZ_VK_FULL_SHARED_ZERO=1  **the CONTROL; the scoped zero is ON BY DEFAULT since part 122
+                  (`1b14044`).** The default zeroes only the vfetch table entries the
+                  vertex shader DECLARES, plus the head and the tail of the 2,192-byte
+                  shared block (clip planes at 2,080, RT words at 2,176): 1,530 of 1,536
+                  table bytes go unwritten on the average draw, ~14 MB a frame of
+                  write-combined stores removed. This variable restores the unconditional
+                  zero every release before it carried. Prints its state once at boot
+                  (`[vk] shared block: SCOPED|FULL zero`). FIRST bisection for garbage
+                  vertex data or wrong clip planes. Priced: −0.21 ms alone in part 109;
+                  with the texture memo −1.09 ms on `cz-draw` at 10,300 draws in part 122
+                  (11.06 -> 9.97, se 0.1, wall −0.5). History: `CZ_VK_SCOPED_SHARED_ZERO=1`
+                  was the opt-in arm from part 109 to part 122 and is NOT READ any more.
 CZ_VK_SHARED_ZERO_POISON=1  **the positive control for the above, and the thing that
                   makes it safe rather than plausible.** Writes 0xFF over exactly the
                   bytes the scoped zero skips, so a shader reading one gets a colossal
@@ -3778,13 +3773,22 @@ CZ_VK_SHARED_ZERO_POISON=1  **the positive control for the above, and the thing 
                   picture looks the same" cannot tell a safe skip from an arena that
                   happened to hold zeros; this can. Measured INSIDE the picture null on
                   all three era statistics.
-CZ_VK_TEXMEMO=1   **an ARM, off by default (part 109).** A 32-entry per-fetch-slot memo
-                  in `UploadTexture`: a hit is a 24-byte memcmp and skips the hash, the
-                  decode and the map. 74% served; worth **-0.33 ms**, which missed the
-                  same 0.4 ms kill rule. `CZ_VK_TEXMEMO_VERIFY=1` computes both answers
-                  and counts disagreements — 0 over 718 million served lookups.
-                  Part 122: see the SCOPED_SHARED_ZERO entry — the pair is −1.09 ms on
-                  cz-draw now that the renderer thread is the bound.
+CZ_VK_NO_TEXMEMO=1  **the CONTROL; the texture memo is ON BY DEFAULT since part 122
+                  (`1b14044`).** A 32-entry per-fetch-slot memo in `UploadTexture`: a hit
+                  is a 24-byte compare of the slot's fetch constant and skips the hash, the
+                  decode and the map; invalidated by `g_texGen` (slot recycle, TexInsert,
+                  snapshot erase/clear, render-target recreate). ~79% served at the crowd.
+                  Prints `[texmemo] ON|OFF` once at boot. FIRST bisection for a frozen or
+                  wrong texture. `CZ_VK_TEXMEMO=1` was the opt-in arm until part 122 and is
+                  NOT READ any more.
+CZ_VK_TEXMEMO_VERIFY=1  computes both answers on every memo hit and counts disagreements
+                  (`[texmemo] ... disagreements`). **The count is armed ONLY under this
+                  variable** — a run without it prints 0 by construction (part 122's
+                  retraction). Part 122 on the flipped build: 0 of 267,406,653.
+CZ_VK_TEXMEMO_VERIFY_POISON=1  the verifier's positive control: the compare is made
+                  against a deliberately wrong slot, so every verified hit must count as a
+                  disagreement. Part 122: 141,184,658 of 141,184,659. Run it whenever the
+                  verifier itself changes.
 ```
 
 ```
