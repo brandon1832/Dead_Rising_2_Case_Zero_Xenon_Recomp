@@ -21,8 +21,9 @@
 //
 // Default: 4096 sets (~80 KB of guest heap more). CZ_NO_SHADER_POOL_GROWTH=1 keeps the
 // title's own size (the control). CZ_SHADER_POOL=N picks another size (1300..65535).
-// Logs one line when it raises the size. The write is refused, loudly, when the word
-// there is not the title's 1300 at that moment: the one check that catches a moved image.
+// A second pool beside it (0x829ED7EC, also 1300 after boot) is grown the same way (see
+// kPools). Logs one line per pool raised. A write is refused, loudly, when the word there
+// is not the title's 1300 at that moment: the one check that catches a moved image.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -33,8 +34,20 @@ extern "C" PPC_FUNC(__imp__sub_827BE658);
 
 namespace
 {
-constexpr uint32_t kPixelConstantSetPoolSize = 0x829ED7F4;   // read at 0x827BEF4C
-constexpr uint32_t kTitleSize = 1300;        // what sub_825D37C8 stored
+// The two pools sub_825D37C8 sizes 1300, each read by the builder below. The second one
+// is grown too because Case West's matching pool (its 0x82A00D2C, 1340) ran out with
+// 14 brought pixel shaders (a failed allocation, a fault reading 0x1C; Case West gotcha
+// 332); here 45 loaded without it, but the two ports stay the same shape.
+struct PoolWord
+{
+    uint32_t address;
+    uint32_t title;     // what sub_825D37C8 stored
+    const char* what;
+};
+constexpr PoolWord kPools[] = {
+    {0x829ED7F4, 1300, "shader constant sets (read at 0x827BEF4C, renderer +3492)"},
+    {0x829ED7EC, 1300, "the pool read at 0x827BEEB4 (renderer +3480)"},
+};
 constexpr uint32_t kDefaultGrownSize = 4096;
 
 uint32_t GrownSize()
@@ -50,37 +63,34 @@ uint32_t GrownSize()
     }
     return kDefaultGrownSize;
 }
+
+void Grow(uint8_t* base, const PoolWord& p, uint32_t grown)
+{
+    uint32_t be;
+    memcpy(&be, base + p.address, 4);
+    const uint32_t was = __builtin_bswap32(be);
+    if (was == grown)
+        return;   // a second build of the pools: already grown
+    if (was != p.title)
+    {
+        fprintf(stderr, "[shaderpool] NOT growing %s: 0x%08X holds %u, expected %u (image "
+                        "moved?)\n", p.what, p.address, was, p.title);
+        return;
+    }
+    be = __builtin_bswap32(grown);
+    memcpy(base + p.address, &be, 4);
+    fprintf(stderr, "[shaderpool] %s: %u -> %u (mods can bring pixel shaders; "
+                    "CZ_NO_SHADER_POOL_GROWTH=1 keeps %u)\n", p.what, was, grown, was);
+}
 }   // namespace
 
-// The renderer's pool builder: raise the pixel shader constant set count, then build.
+// The renderer's pool builder: raise the pools' counts, then build.
 PPC_FUNC(sub_827BE658)
 {
-    const uint32_t grown = GrownSize();
-    if (grown)
-    {
-        uint32_t be;
-        memcpy(&be, base + kPixelConstantSetPoolSize, 4);
-        const uint32_t was = __builtin_bswap32(be);
-        if (was == grown)
-            ;   // a second build of the pools: already grown
-        else if (was != kTitleSize)
-        {
-            static bool said = false;
-            if (!said)
-                fprintf(stderr,
-                        "[shaderpool] NOT growing: 0x%08X holds %u, expected %u (image "
-                        "moved?)\n", kPixelConstantSetPoolSize, was, kTitleSize);
-            said = true;
-        }
-        else if (was < grown)
-        {
-            be = __builtin_bswap32(grown);
-            memcpy(base + kPixelConstantSetPoolSize, &be, 4);
-            fprintf(stderr,
-                    "[shaderpool] shader constant sets: %u -> %u (mods can bring pixel "
-                    "shaders; CZ_NO_SHADER_POOL_GROWTH=1 keeps %u)\n",
-                    was, grown, was);
-        }
-    }
+    static bool done = false;
+    if (const uint32_t grown = GrownSize(); grown && !done)
+        for (const PoolWord& p : kPools)
+            Grow(base, p, grown);
+    done = true;
     __imp__sub_827BE658(ctx, base);
 }

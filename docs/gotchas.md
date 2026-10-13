@@ -7302,7 +7302,10 @@ From phase C part 18 (the frame rate — and none of it was work):
     from data, find every writer, not just the initial value. Measured with the DR2 CZ/CW
     modding toolkit's Laser Sword (45 Case West pixel shaders added to the banks):
     `CZ_NO_SHADER_POOL_GROWTH=1` faults at boot loading `zombies.big`; grown to 4096 the
-    title boots, and the shaders alone load into gameplay. (Case Zero, 2026-10-12,
+    title boots, and the shaders alone load into gameplay. The word beside it (`0x829ED7EC`,
+    420 in the image, also 1300 after boot, pool at renderer +3480) is grown too: Case
+    West's matching pool ran out at 14 brought pixel shaders as a failed allocation, not an
+    assert (its gotcha 332). (Case Zero, 2026-10-12,
     `runtime/cpu/shader_pool.cpp`, `docs/instruments.md` §Shader constant set pool; Case
     West: its gotcha 332.)
 
