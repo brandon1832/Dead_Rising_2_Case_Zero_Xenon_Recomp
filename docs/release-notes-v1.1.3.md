@@ -3,7 +3,8 @@
 **DRAFT — built and gated, NOT PUBLISHED.** Binaries are master at `a0e4f35`, built
 2026-10-13, all four legs: Linux tarball + AppImage (old base, glibc 2.35 floor), Steam
 Deck (`CZ_DECK` defaults: ZOMBIE/WORLD DETAIL 1.0), Windows (czwin). XenonLive `134d49b` /
-launcher overlay `e59d3ed` on BOTH platforms. Gate results and hashes are filled in below
+launcher overlay `e59d3ed` on BOTH platforms. **The Windows zip is from `9191cb0`** (the DPI-awareness fix, Windows-only code; the
+Linux and Deck legs are from `a0e4f35` — the function is empty off Windows). Gate results and hashes are filled in below
 as each leg passes.
 
 **Gates, 2026-10-13:** Linux release `.text` byte-identical to its matched RelWithDebInfo
@@ -97,6 +98,10 @@ game data is reused, and **your existing saves load normally**.
 
 ### Other
 
+- **Windows: the Resolution list now reaches your screen's real resolution** when
+  Windows display scaling is above 100% (most laptops). Started through the launcher,
+  the game was being told the scaled-down desktop size — a 2560x1440 screen at 150%
+  read as 1707x960 — and offered nothing above 1600x900.
 - **Integrated-graphics laptops that showed a white window with sound** (reported on Dead
   Rising 2: Case West, which shares this code): the game now retries without the
   driver's switchable-graphics layer, and if the renderer still cannot start it says
@@ -122,4 +127,4 @@ too and appears to be the original game's behaviour.
 | `CaseZeroRecomp-linux-x86_64.tar.zst` | `163683934e124eb276257ee2edfe40f189d5af0460e734cf4b9834f09c207eb8` |
 | `CaseZeroRecomp-linux-x86_64.AppImage` | `ab1a655aaa151128bad4ffe23b25b6a8e68423e2dfc2712cd07ee5ffa77e394c` |
 | `CaseZeroRecomp-steamdeck-x86_64.tar.gz` | `72bf4773a267a963d92f424529b3a2d237f4deeb89244a10b88e2523e4d1613b` |
-| `CaseZeroRecomp-windows-x86_64.zip` | `04b71a4fba0b3a35189ed35d81123a425f9a3a5694589299791038b176469dc8` |
+| `CaseZeroRecomp-windows-x86_64.zip` | `03a4f01279a06a3454eed41eee2a71109c1bc26abb018f428696a53f2c2b2e79` |
