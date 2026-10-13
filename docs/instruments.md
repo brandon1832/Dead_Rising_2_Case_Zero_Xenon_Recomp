@@ -4013,6 +4013,21 @@ CZ_NO_AUDIO_MODS=1  never read assets/game_mods/dr2kit_audio/substitutions.txt: 
                     SDL_AUDIO_DISK_OUTPUT_FILE).
 ```
 
+## Shader constant set pool (mods' brought pixel shaders, 2026-10-12)
+
+```
+CZ_NO_SHADER_POOL_GROWTH=1  keep the title's pool of shader constant sets at 1300 (the
+                    control). By default runtime/cpu/shader_pool.cpp raises it to 4096
+                    just before the renderer's pool builder (sub_827BE658) reads it, so
+                    the DR2 CZ/CW modding toolkit can add Case West's pixel shaders to
+                    the banks (one set per loaded pixel shader; Case Zero ships 1,280).
+                    Logs "[shaderpool] shader constant sets: 1300 -> 4096 (...)", or
+                    "[shaderpool] NOT growing: ..." when the word is not 1300 (moved
+                    image). Without it, ~29 added pixel shaders assert "Shader constant
+                    set overflow." / fault at boot (gotcha 643).
+CZ_SHADER_POOL=N    another size, 1300..65535.
+```
+
 ## Part 99 — subtitle language and the boot-logo skip
 
 ```

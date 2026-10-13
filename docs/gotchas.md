@@ -7289,3 +7289,20 @@ From phase C part 18 (the frame rate — and none of it was work):
     floor. Setting it on the PM4 pump measured a null HERE because the hold it shortens
     was waiting on the guest, not on the nap — so check what the wait is FOR before
     buying the slack. (Case Zero, part 122, `perf-plan-part122.md` §4.)
+
+643. **A TABLE IN THE IMAGE'S DATA IS ONLY THE VALUE UNTIL SOMETHING STORES OVER IT.** The
+    renderer sizes its pool of shader constant sets (one per loaded pixel shader) from a
+    word at `0x829ED7F4`, and the image says 384 there; Case West's image says 1340 at its
+    `0x82A00D34`. Raising the Case Zero word at image load would have done nothing: the boot
+    budget function `sub_825D37C8` (called unconditionally from `sub_825D6358`) stores 1300
+    over it before the renderer reads it. A scan of every store through a `lis 0x829F` base
+    found it (the same scan finds no store in Case West, whose 1340 is the image's own), so
+    the growth hooks the READER (`sub_827BE658`, the pool builder) and raises the value
+    just before it runs, refusing loudly if the word is not 1300. Before resizing anything
+    from data, find every writer, not just the initial value. Measured with the DR2 CZ/CW
+    modding toolkit's Laser Sword (45 Case West pixel shaders added to the banks):
+    `CZ_NO_SHADER_POOL_GROWTH=1` faults at boot loading `zombies.big`; grown to 4096 the
+    title boots, and the shaders alone load into gameplay. (Case Zero, 2026-10-12,
+    `runtime/cpu/shader_pool.cpp`, `docs/instruments.md` §Shader constant set pool; Case
+    West: its gotcha 332.)
+
