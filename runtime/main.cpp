@@ -512,7 +512,7 @@ int main(int argc, char** argv)
     // default is printed, because an env var the player cannot see being set is a
     // bisection that starts from a lie.
     {
-        std::ifstream envf(HostPaths::ExeDir() / "cz_defaults.env");
+        std::ifstream envf(HostPaths::ShippedDir() / "cz_defaults.env");
         std::string line;
         while (envf && std::getline(envf, line))
         {
