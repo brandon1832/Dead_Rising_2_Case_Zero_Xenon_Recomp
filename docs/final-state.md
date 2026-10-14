@@ -55,7 +55,9 @@ number.
 | macOS freezes after ~15 min left idle (sound continues, 0 fps); ~40 fps on an M1 | open, never profiled on the release build | `open-items.md` 0zk, `macos-build-setup.md` |
 | macOS is not notarised | players must run `xattr -dr com.apple.quarantine` once, or the app is translocated and cannot find `assets/` | `release-notes-v1.1.3.md`, `release-plan.md` C.4 |
 | the "LAS VEGAS 46" sign shows holes while the camera moves | parked; 11 arms refuted; next step a draw-ID F9 of a bad frame | `las-vegas-sign-holes.md`, `open-items.md` 0zj |
-| rooftop props / sign lettering pop at streaming boundaries | open, never compared at WORLD DETAIL 1.0 | `lod-and-quality-options.md` §5, `open-items.md` 0zi |
+| rooftop props / sign lettering pop at streaming boundaries | open, never compared at WORLD DETAIL 1.0 | `lod-and-quality-options.md` §5, `open-items.md` 0zi, GitHub issue #5 |
+| Chuck blinks off and back on the motorcycle during the military escape | reported by eye 2026-10-14, not investigated; solo vs co-op unknown | GitHub issue #3 |
+| speedrun block: updates 1-2 s late; never updates on the co-op client (host untested) | reported by a runner 2026-10-14, not investigated | GitHub issue #4, `speedrun-block.md` |
 | highlight brightness measures ~half what the engine expects | open | `lighting-plan-part120.md`, `phase5-notes.md` §6fc |
 | performance: the renderer thread `cz-draw` is the frame's bound (~10 ms at a crowd) | a to-do list, ordered | `perf-plan-part122.md` §7 = GitHub issue #2 |
 | the texture memo + scoped zero bundle (ON since `1b14044`) never had its 10-minute soak | owed; `CZ_VK_NO_TEXMEMO=1` / `CZ_VK_FULL_SHARED_ZERO=1` are the first bisection for any wrong texture or wrong vertices | `perf-plan-part122.md` |
