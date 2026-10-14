@@ -133,8 +133,10 @@ game folder at any time without losing progress.
   the path to try first; on the dev box the same zip runs end to end under Wine 11,
   so a Deck failure there would be new information — please report it with
   `PROTON_LOG=1`.
-- **No macOS build yet** — nothing blocks it in principle; it awaits test
-  hardware.
+- **macOS (v1.1.3, Apple Silicon only) is an early build**: tested on one M1, where it
+  plays; it can freeze when left idle for ~15 minutes and runs at ~40 fps there. Run
+  `xattr -dr com.apple.quarantine <the unzipped folder>` once before the first launch
+  (the build is not notarised).
 
 ## Debug menu (optional)
 

@@ -3,7 +3,10 @@
 **DRAFT — built and gated, NOT PUBLISHED.** Binaries are master at `a0e4f35`, built
 2026-10-13, all four legs: Linux tarball + AppImage (old base, glibc 2.35 floor), Steam
 Deck (`CZ_DECK` defaults: ZOMBIE/WORLD DETAIL 1.0), Windows (czwin). XenonLive `134d49b` /
-launcher overlay `e59d3ed` on BOTH platforms. **The Windows zip is from `9191cb0`** (the DPI-awareness fix, Windows-only code; the
+launcher overlay `e59d3ed` on BOTH platforms. **The macOS zip is from `bcaed0d`** (first macOS artifact: `tools/release_package_macos.sh`
+on czmac, ad-hoc signed, first-run flow gated from a fresh unzip with the bundled
+MoltenVK only, title screen rendered; operator-tested windowed on the M1).
+**The Windows zip is from `9191cb0`** (the DPI-awareness fix, Windows-only code; the
 Linux and Deck legs are from `a0e4f35` — the function is empty off Windows). Gate results and hashes are filled in below
 as each leg passes.
 
@@ -49,6 +52,28 @@ game data is reused, and **your existing saves load normally**.
 > again: **PREPARING SHADERS** (part of the shader cache is rebuilt — this is the hair
 > fix reaching your install) and a few seconds of regenerating the patched game data
 > (for the co-op ending). Both are the update working, not a hang.
+
+### 🍎 New: macOS (Apple Silicon)
+
+The first macOS build: `CaseZeroRecomp-macos-arm64.zip`, for Macs with an M1 or newer
+chip. It is an **early build**: tested on one M1 MacBook Air, where it plays, but expect
+rough edges (see Known limitations).
+
+1. Unzip it, then move the `CaseZeroRecomp` folder wherever you want to keep it.
+2. **Before the first launch**, open Terminal and run this once (drag the folder onto the
+   Terminal window to fill in its path):
+   ```
+   xattr -dr com.apple.quarantine ~/Downloads/CaseZeroRecomp
+   ```
+   The build is not notarised by Apple, so macOS marks the download as untrusted. Without
+   this step macOS either refuses to open it or runs it from a hidden temporary location
+   where it cannot find its `assets` folder.
+3. Open `CaseZeroRecomp.app`, then drop your Case Zero package onto the launcher window
+   (or put it in `assets/package/` first). The first launch unpacks the game and prepares
+   the shaders, which takes a few minutes.
+
+Keep `CaseZeroRecomp.app` and the `assets` folder **together in the same folder**. Saves
+go to `~/Library/Application Support/Dead Rising 2 Case Zero/`.
 
 ### Co-op
 
@@ -115,7 +140,8 @@ game data is reused, and **your existing saves load normally**.
 
 ### Known limitations
 
-macOS is not released yet (it runs, but is not ready). The Linux artifacts need glibc
+macOS (new, early): it can freeze if left idle for about 15 minutes (sound continues),
+and runs at about 40 fps on an M1 MacBook Air; Intel Macs are not supported. The Linux artifacts need glibc
 2.35 or newer (Ubuntu 22.04 and later, or the AppImage). Highlight brightness is still
 not exactly right. The pawnshop's wheel can be taken twice; that happens in single player
 too and appears to be the original game's behaviour.
@@ -127,4 +153,5 @@ too and appears to be the original game's behaviour.
 | `CaseZeroRecomp-linux-x86_64.tar.zst` | `163683934e124eb276257ee2edfe40f189d5af0460e734cf4b9834f09c207eb8` |
 | `CaseZeroRecomp-linux-x86_64.AppImage` | `ab1a655aaa151128bad4ffe23b25b6a8e68423e2dfc2712cd07ee5ffa77e394c` |
 | `CaseZeroRecomp-steamdeck-x86_64.tar.gz` | `72bf4773a267a963d92f424529b3a2d237f4deeb89244a10b88e2523e4d1613b` |
+| `CaseZeroRecomp-macos-arm64.zip` | `6058ac9dff3ca79119425c0e784ce4ffeae1590d6512981bdd4d749a852d97f7` |
 | `CaseZeroRecomp-windows-x86_64.zip` | `03a4f01279a06a3454eed41eee2a71109c1bc26abb018f428696a53f2c2b2e79` |
