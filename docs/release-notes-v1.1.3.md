@@ -1,6 +1,6 @@
 # Release notes — v1.1.3
 
-**DRAFT — built and gated, NOT PUBLISHED.** Binaries are master at `a0e4f35`, built
+**PUBLISHED (2026-10-14T05:12:20Z) — THE FINAL RELEASE OF THE PROJECT.** Binaries are master at `a0e4f35`, built
 2026-10-13, all four legs: Linux tarball + AppImage (old base, glibc 2.35 floor), Steam
 Deck (`CZ_DECK` defaults: ZOMBIE/WORLD DETAIL 1.0), Windows (czwin). XenonLive `134d49b` /
 launcher overlay `e59d3ed` on BOTH platforms. **The macOS zip is from `bcaed0d`** (first macOS artifact: `tools/release_package_macos.sh`
