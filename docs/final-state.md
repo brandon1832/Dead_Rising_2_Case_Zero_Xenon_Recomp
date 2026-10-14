@@ -66,7 +66,7 @@ number.
 | the pawnshop wheel respawns after being taken | happens in single player too; believed the title's own, unchecked on a real 360 | `coop-part14-kickoff.md` §1, issue #13 |
 | loud audio after ~40 minutes (one player report) | parked | `open-items.md` 0za, issue #14 |
 | 21:9: the watch screen and the slot machines are pillarboxed (16:9 with black side bars) | reported by eye 2026-10-14, not investigated | issue #18 |
-| 21:9 HUD anchoring | parked on branch `hud-anchor-wip` | that branch (local only until pushed), issue #15 |
+| 21:9 HUD anchoring | parked on branch `hud-anchor-wip` | that branch (on GitHub), issue #15 |
 | a shadow-distance option; RT shadows | parked | `shadow-distance-investigation.md`, issue #16; `open-items.md` 0v, issue #17 |
 
 ## 4. What will not exist for you
