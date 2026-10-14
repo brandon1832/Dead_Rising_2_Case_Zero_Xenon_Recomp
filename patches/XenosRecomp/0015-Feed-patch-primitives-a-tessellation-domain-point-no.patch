@@ -1,0 +1,129 @@
+From 0d57b620e93efa6a4c73ddeb0f6244b84b788396 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Sun, 2 Aug 2026 17:48:06 -0400
+Subject: [PATCH 15/23] Feed patch primitives a tessellation domain point, not
+ a vertex index
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Xenos prim 0x11/0x12 are TRIANGLE PATCH / QUAD PATCH. A tessellated draw does
+not hand the vertex shader a vertex index at all — it hands it a point in the
+patch DOMAIN, so such a shader is a domain shader in all but name. The seed
+here was unconditionally `float4(iVertexId, 0, 0, 0)`, which means every vertex
+of a patch gets u = v = 0, collapses onto one patch corner, and the draw writes
+nothing at all: measured at 0% depth coverage against 27% once a domain point
+is supplied, same draw stream and same render state.
+
+Fable2's four landscape patch vertex shaders (LANDSCAPE_TESSELLATOR_VS,
+LANDSCAPE_SIMPLE_BACKGROUND_TESSELLATOR_VS, LANDSCAPE_ADAPTIVE_TESSELLATION and
+..._NEW), plus three water ones, all read r0.x as a patch index biased by c113,
+r0.yz as the domain point and r1.x as a 4-way orientation code compared against
+c255 — read off their own disassembly, consistent across both families.
+
+No tessellation stages are added. The host runtime expands each patch into a
+grid of quads and publishes the grid side at SharedConstants+280; XeVertexSeed
+turns the vertex index back into (patchIndex, u, v). A grid of 0 means "not a
+patch draw" and returns the plain vertex index, so every ordinary draw is
+bit-identical to before.
+
+Regression control: retranslating the whole 576-blob Fable2 bank gives 778
+modules with zero vertex-shader failures, the same single pre-existing pixel
+shader failure as before.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ XenosRecomp/shader_common.h       | 48 +++++++++++++++++++++++++++++++
+ XenosRecomp/shader_recompiler.cpp |  8 +++++-
+ 2 files changed, 55 insertions(+), 1 deletion(-)
+
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index 752e003..6acffed 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -46,6 +46,10 @@ struct PushConstants
+ // The runtime computes this per draw (PS reads r, VS doesn't export r). Offset 276
+ // is the free c17.y slot after g_AlphaThreshold, before the 1D-alias table at 288.
+ #define g_ParamGenMask             vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 276)
++// Fable2 tessellation (P1 Stage B): the side of the quad grid the runtime has
++// expanded each patch into, or 0 for an ordinary draw. 280 is the last free
++// slot before the 1D-alias table at 288. See XeVertexSeed below.
++#define g_TessGrid                 vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 280)
+ // Fable2: window->NDC position transform (identity when the guest viewport
+ // transform is enabled); 1D descriptor indices occupy 288..351.
+ #define g_PosScale                 vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 352)
+@@ -90,8 +94,52 @@ uint g_SpecConstants();
+ // D3D path carries only the named 16+16 bool scheme; raw-address reads see 0.
+ #define g_BoolConstant(n) 0
+ 
++// The D3D path has no tessellation support; 0 makes XeVertexSeed below collapse
++// to the plain vertex index, i.e. exactly the pre-Stage-B behaviour.
++#define g_TessGrid 0
++
+ #endif
+ 
++// The seed for r0 of every Xenos vertex shader.
++//
++// ORDINARY DRAWS (g_TessGrid == 0): r0.x is the auto-loaded vertex index and
++// r0.yzw are zero — bit-identical to what this used to be inline.
++//
++// PATCH DRAWS (Xenos prim 0x11 triangle patch / 0x12 quad patch): Xenos does not
++// feed a vertex index at all. It feeds a point in the patch DOMAIN, and the
++// shader is a domain shader in all but name. Fable2's four landscape patch
++// vertex shaders read r0.x as a patch index (biased by c113), r0.yz as that
++// domain point, and r1.x as a 4-way patch orientation code — read off their own
++// disassembly, and consistent across both shader families.
++//
++// With no domain point every terrain vertex gets u = v = 0, collapses onto one
++// patch corner, and the draw writes nothing: measured at 0 % depth coverage
++// against 27 % once a domain is supplied, same draw stream and same render state
++// (docs/world-era-fatal-and-selector.md §3d-viii, §3e, §3f).
++//
++// There is no tessellator here and deliberately none added: the runtime expands
++// each patch host-side into a g_TessGrid x g_TessGrid grid of quads (6 vertices
++// per cell) and publishes the grid size. Everything below is then arithmetic on
++// the vertex index — no vertex buffer and no index buffer, which is what these
++// shaders already expect, since they declare no vertex inputs at all and the
++// guest's "index" buffer for such a draw holds tessellation FACTORS.
++float4 XeVertexSeed(uint vertexId)
++{
++    uint grid = g_TessGrid;
++    if (grid == 0)
++        return float4(vertexId, 0.0, 0.0, 0.0);
++
++    uint vpp    = 6u * grid * grid;   // vertices per patch
++    uint patch  = vertexId / vpp;
++    uint cell   = (vertexId % vpp) / 6u;
++    uint corner = vertexId % 6u;
++    // Two triangles per cell: (0,0) (1,0) (0,1) and (1,0) (1,1) (0,1).
++    float2 c = float2((corner == 1u || corner == 3u || corner == 4u) ? 1.0 : 0.0,
++                      (corner == 2u || corner == 4u || corner == 5u) ? 1.0 : 0.0);
++    float2 uv = (float2(float(cell % grid), float(cell / grid)) + c) / float(grid);
++    return float4(float(patch), uv.x, uv.y, 0.0);
++}
++
+ Texture2D<float4> g_Texture2DDescriptorHeap[] : register(t0, space0);
+ Texture3D<float4> g_Texture3DDescriptorHeap[] : register(t0, space1);
+ TextureCube<float4> g_TextureCubeDescriptorHeap[] : register(t0, space2);
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 3812fbf..6474dbc 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -1682,7 +1682,13 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                 // Every VS: r0.x = the auto-loaded vertex index (see the
+                 // SV_VertexID input above). Unconditional, as on hardware —
+                 // shaders that fetch vertex elements read it as well.
+-                out += "float4(iVertexId, 0.0, 0.0, 0.0);\n";
++                //
++                // XeVertexSeed (shader_common.h) returns exactly that when the
++                // draw is an ordinary one. For a PATCH primitive it returns the
++                // patch index and domain point instead, because Xenos feeds a
++                // tessellated draw a domain location rather than an index and a
++                // vertex shader reading r0.yz is a domain shader in all but name.
++                out += "XeVertexSeed(iVertexId);\n";
+             }
+             else
+             {
+-- 
+2.55.0
+

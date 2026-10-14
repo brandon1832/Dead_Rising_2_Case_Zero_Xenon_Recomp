@@ -1,0 +1,122 @@
+From 296711632e84431b6424f918015ac77f0bb60540 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Tue, 21 Jul 2026 14:44:46 -0400
+Subject: [PATCH 10/23] Survive reserved/undeclared encodings in retail shaders
+
+Retail Fable2 vertex shaders carry three encodings that killed translation:
+- scalar opcode 63 (reserved): emitted 'ps = saturate()' - empty argument
+  list, failing the whole shader at the HLSL stage. Now retains ps (NOP
+  semantics) with a stderr note.
+- vector opcode 31 (reserved): fell past the caseless switch (empty
+  expression) AND tripped the '>= MaxA' address-register branch, emitting a
+  bogus swizzle line. The a0 branch is now exactly '== MaxA'; unknown vector
+  opcodes write the destination's own value (identity NOP).
+- a vfetch whose address has no declared vertex element dereferenced
+  map::end() and segfaulted (vs_f50f743ba7865294). Now emits (0,0,0,1) for
+  the undeclared attribute and continues.
+
+With these, all 18 previously-failing Fable2 world VS translate (249/249).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ XenosRecomp/shader_recompiler.cpp | 62 ++++++++++++++++++++++++++++++-
+ 1 file changed, 61 insertions(+), 1 deletion(-)
+
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 8985354..7c7b45e 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -190,6 +190,26 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
+ 
+     auto findResult = vertexElements.find(address);
+     assert(findResult != vertexElements.end());
++    if (findResult == vertexElements.end())
++    {
++        // A vfetch with no declared vertex element (seen in retail Fable2:
++        // vs_f50f743ba7865294) dereferenced end() and crashed the whole
++        // translation. Emit a neutral constant instead — the shader still
++        // compiles; the undeclared attribute reads as (0,0,0,1).
++        out += "float4(0.0, 0.0, 0.0, 1.0).";
++        printDstSwizzle(instr.dstSwizzle, true);
++        out += ";\n";
++        printDstSwizzle01(instr.dstRegister, instr.dstSwizzle);
++        fprintf(stderr, "[XenosRecomp] vfetch with undeclared vertex element (addr %u)\n",
++                address);
++        if (instr.isPredicated)
++        {
++            --indentation;
++            indent();
++            out += "}\n";
++        }
++        return;
++    }
+ 
+     switch (findResult->second.usage)
+     {
+@@ -723,8 +743,10 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+ 
+         out += " 0.0;\n";
+     }
+-    else if (instr.vectorOpcode >= AluVectorOpcode::MaxA)
++    else if (instr.vectorOpcode == AluVectorOpcode::MaxA)
+     {
++        // Exactly MaxA (29): reserved opcodes 30/31 land here under the old
++        // ">=" and emitted a bogus a0 line (retail Fable2 shaders carry them).
+         indent();
+         println("a0 = (int)clamp(floor(({}).w + 0.5), -256.0, 255.0);", op(VECTOR_0));
+     }
+@@ -863,6 +885,30 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+         case AluVectorOpcode::Dst:
+             print("dst({}, {})", op(VECTOR_0), op(VECTOR_1));
+             break;
++
++        default:
++            // Reserved/undecoded vector opcode (30/31 seen in retail Fable2
++            // shaders): write the destination's own value (identity — the
++            // safest NOP) instead of an empty expression that fails the
++            // whole shader. Export registers are write-only, so those get
++            // 0.0. Logged so real semantics can be added if it matters.
++            if (!exportRegister.empty())
++            {
++                out += "0.0";
++            }
++            else
++            {
++                print("r{}.", instr.vectorDest);
++                for (size_t i = 0; i < 4; i++)
++                {
++                    if ((vectorWriteMask >> i) & 0x1)
++                        out += SWIZZLES[i];
++                }
++            }
++            print(" /* unhandled vector opcode {} */", uint32_t(instr.vectorOpcode));
++            fprintf(stderr, "[XenosRecomp] unhandled vector opcode %u\n",
++                    unsigned(instr.vectorOpcode));
++            break;
+         }
+ 
+         if (instr.vectorSaturate)
+@@ -1076,6 +1122,20 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+         case AluScalarOpcode::Cos:
+             print("cos({})", op(SCALAR_0));
+             break;
++
++        case AluScalarOpcode::RetainPrev:
++            out += "ps";
++            break;
++
++        default:
++            // Unknown/undecoded scalar opcode: keep the previous ps (retain
++            // semantics) instead of emitting an empty argument list that
++            // fails the whole shader at the HLSL stage. Logged so the gap
++            // can be identified and given real semantics.
++            print("ps /* unhandled scalar opcode {} */", uint32_t(instr.scalarOpcode));
++            fprintf(stderr, "[XenosRecomp] unhandled scalar opcode %u\n",
++                    unsigned(instr.scalarOpcode));
++            break;
+         }
+ 
+         if (instr.scalarSaturate)
+-- 
+2.55.0
+

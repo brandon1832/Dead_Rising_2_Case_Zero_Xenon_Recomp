@@ -1,0 +1,256 @@
+From d74d36109186d6706f03d4d84ef88cfde7cce72e Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Wed, 5 Aug 2026 16:39:04 -0400
+Subject: [PATCH 16/23] Emit dependent vertex fetches as in-shader raw loads
+ (XeVfetchDep)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A Xenos vfetch addresses its stream with a register; only while that register
+holds the auto vertex index is the fetch expressible as a vertex attribute.
+Fable2 chains fetches (bone palettes, per-vertex record indices, particle
+state) and assembles address registers across multiple dest-swizzled fetches,
+so a vfetch with no declared vertex element is now emitted as XeVfetchDep():
+a vk::RawBufferLoad from the stream itself, at the index the shader computed,
+decoded per the instruction's own format/signed/num fields, with the Xenos
+zero-past-declared-size contract. The runtime publishes each such stream's
+device address and size in a per-draw table at SharedConstants+544 (16 B per
+fetch slot); a zero entry reads as (0,0,0,0), which is also the old fallback
+for the genuinely undeclared direct fetch. Mini-fetches inherit slot and
+stride from the previous full vfetch.
+
+Fable2XenonRecomp docs/world-era-fatal-and-selector.md §3z has the evidence:
+the CPU-side gather could cover exactly one shape of this (packed-byte
+producer, one hop) and declined 6.5M attribute instances per run on the
+restored main lit pass alone.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ XenosRecomp/shader_common.h       | 120 ++++++++++++++++++++++++++++++
+ XenosRecomp/shader_recompiler.cpp |  48 ++++++++++--
+ XenosRecomp/shader_recompiler.h   |   6 ++
+ 3 files changed, 166 insertions(+), 8 deletions(-)
+
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index 6acffed..eaa9b4d 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -54,6 +54,126 @@ struct PushConstants
+ // transform is enabled); 1D descriptor indices occupy 288..351.
+ #define g_PosScale                 vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 352)
+ #define g_PosOffset                vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 360)
++
++// Fable2 DEPENDENT VERTEX FETCH (docs/world-era-fatal-and-selector.md §3z).
++//
++// A Xenos vfetch addresses its stream with a REGISTER; only while that register
++// still holds the auto-loaded vertex index is the fetch expressible as a Vulkan
++// vertex attribute. Fable2 chains fetches (bone palettes, per-vertex record
++// indices, particle state), so a dependent fetch is emitted as a raw load from
++// the stream itself, at the index the shader actually computed — dest-swizzle
++// lane composition, chained indirection and address arithmetic all included by
++// construction, which is exactly what the runtime-side CPU gather could not do.
++//
++// The runtime publishes a per-draw slot table at SharedConstants+544: 16 bytes
++// per fetch slot {deviceAddress.lo, deviceAddress.hi, sizeDwords, 0} for every
++// slot a dependent fetch reads (whole stream, dword-swapped like every vertex
++// copy). A zero entry (old runtime, or the runtime chose to skip) reads as
++// (0,0,0,0), the pre-§3z fallback. Reads past the declared size return zero,
++// which is the Xenos fetch-constant contract.
++float4 XeVfetchDep(uint slot, float addrVal, uint rounded, uint stride,
++                   int offsetDw, uint fmt, uint sgn, uint numInt)
++{
++    uint2 tbl = vk::RawBufferLoad<uint2>(g_PushConstants.SharedConstants + 544 + slot * 16);
++    uint sizeDw = vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 544 + slot * 16 + 8);
++    uint elemDw = (fmt == 26 || fmt == 32 || fmt == 37) ? 2u
++                : (fmt == 57) ? 3u
++                : (fmt == 38) ? 4u
++                : 1u;
++    int idx = int(floor(addrVal + (rounded != 0 ? 0.5 : 0.0)));
++    int startDw = idx * int(stride) + offsetDw;
++    if ((tbl.x | tbl.y) == 0 || startDw < 0 || uint(startDw) + elemDw > sizeDw)
++        return float4(0.0, 0.0, 0.0, 0.0);
++    uint64_t a = (uint64_t(tbl.y) << 32) | uint64_t(tbl.x);
++    a += uint64_t(uint(startDw)) * 4;
++    uint4 raw = uint4(0, 0, 0, 0);
++    raw.x = vk::RawBufferLoad<uint>(a);
++    if (elemDw > 1) raw.y = vk::RawBufferLoad<uint>(a + 4);
++    if (elemDw > 2) raw.z = vk::RawBufferLoad<uint>(a + 8);
++    if (elemDw > 3) raw.w = vk::RawBufferLoad<uint>(a + 12);
++    // Decode over the dword-swapped copy, matching the semantics the direct
++    // path gets from XenosVtxFormat's Vulkan formats (byte 0 of the LE dword is
++    // component x, low half is component x).
++    float4 v = float4(0.0, 0.0, 0.0, 0.0);
++    switch (fmt)
++    {
++    case 6: // 8_8_8_8
++    {
++        uint4 b = uint4(raw.x & 0xFF, (raw.x >> 8) & 0xFF, (raw.x >> 16) & 0xFF, raw.x >> 24);
++        if (sgn != 0)
++        {
++            int4 s = int4(b) - int4(b.x > 127 ? 256 : 0, b.y > 127 ? 256 : 0,
++                                    b.z > 127 ? 256 : 0, b.w > 127 ? 256 : 0);
++            v = (numInt != 0) ? float4(s) : max(float4(s) / 127.0, -1.0);
++        }
++        else
++            v = (numInt != 0) ? float4(b) : float4(b) / 255.0;
++        break;
++    }
++    case 25: // 16_16
++    case 26: // 16_16_16_16
++    {
++        uint4 h = uint4(raw.x & 0xFFFF, raw.x >> 16, raw.y & 0xFFFF, raw.y >> 16);
++        if (sgn != 0)
++        {
++            int4 s = int4(h) - int4(h.x > 32767 ? 65536 : 0, h.y > 32767 ? 65536 : 0,
++                                    h.z > 32767 ? 65536 : 0, h.w > 32767 ? 65536 : 0);
++            v = (numInt != 0) ? float4(s) : max(float4(s) / 32767.0, -1.0);
++        }
++        else
++            v = (numInt != 0) ? float4(h) : float4(h) / 65535.0;
++        break;
++    }
++    case 31: // 16_16_FLOAT
++        v = float4(f16tof32(raw.x & 0xFFFF), f16tof32(raw.x >> 16), 0.0, 0.0);
++        break;
++    case 32: // 16_16_16_16_FLOAT
++        v = float4(f16tof32(raw.x & 0xFFFF), f16tof32(raw.x >> 16),
++                   f16tof32(raw.y & 0xFFFF), f16tof32(raw.y >> 16));
++        break;
++    case 16: // 10_11_11 packed normal (tfetchR11G11B10's packed branch)
++        v = float4((raw.x & 0x00000400 ? -1.0 : 0.0) + ((raw.x & 0x3FF) / 1024.0),
++                   (raw.x & 0x00200000 ? -1.0 : 0.0) + (((raw.x >> 11) & 0x3FF) / 1024.0),
++                   (raw.x & 0x80000000 ? -1.0 : 0.0) + (((raw.x >> 22) & 0x1FF) / 512.0),
++                   0.0);
++        break;
++    case 7: // 2_10_10_10
++    {
++        uint3 c = uint3(raw.x & 0x3FF, (raw.x >> 10) & 0x3FF, (raw.x >> 20) & 0x3FF);
++        uint w2 = raw.x >> 30;
++        if (sgn != 0)
++        {
++            int3 s = int3(c) - int3(c.x > 511 ? 1024 : 0, c.y > 511 ? 1024 : 0,
++                                    c.z > 511 ? 1024 : 0);
++            int sw = int(w2) - (w2 > 1 ? 4 : 0);
++            v = (numInt != 0) ? float4(float3(s), float(sw))
++                              : float4(max(float3(s) / 511.0, -1.0), max(float(sw), -1.0));
++        }
++        else
++            v = (numInt != 0) ? float4(float3(c), float(w2))
++                              : float4(float3(c) / 1023.0, float(w2) / 3.0);
++        break;
++    }
++    case 33: // 32 (integer kept as float value; no 32-bit-normalized on Vulkan either)
++        v = float4(sgn != 0 ? float(asint(raw.x)) : float(raw.x), 0.0, 0.0, 0.0);
++        break;
++    case 36: // 32_FLOAT
++        v = float4(asfloat(raw.x), 0.0, 0.0, 0.0);
++        break;
++    case 37: // 32_32_FLOAT
++        v = float4(asfloat(raw.x), asfloat(raw.y), 0.0, 0.0);
++        break;
++    case 57: // 32_32_32_FLOAT
++        v = float4(asfloat(raw.x), asfloat(raw.y), asfloat(raw.z), 0.0);
++        break;
++    case 38: // 32_32_32_32_FLOAT
++        v = asfloat(raw);
++        break;
++    default: // unhandled format: zero, and the translator warned at build time
++        break;
++    }
++    return v;
++}
+ // Fable2: the guest's 32 Xenos loop constants (registers 0x4908 + n) at 384..511.
+ // Each is packed count/start/step in its low three bytes; a shader that loops a
+ // run-time number of times (g_SamplesCount in the gauss-blur post pass) reads its
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 6474dbc..1d131ed 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -187,6 +187,24 @@ void ShaderRecompiler::printDstSwizzle01(uint32_t dstRegister, uint32_t dstSwizz
+ 
+ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t address)
+ {
++    // Effective fetch slot and stride: a mini-fetch inherits both from the
++    // previous full vfetch (Fable2 §3z; matches synth_shader_container.py's
++    // parse_ucode, which is what declares — or now deliberately does NOT
++    // declare — the vertex elements this function looks up below).
++    uint32_t fetchSlot, strideDwords;
++    if (instr.isMiniFetch)
++    {
++        fetchSlot = lastVfetchSlot;
++        strideDwords = lastVfetchStride;
++    }
++    else
++    {
++        fetchSlot = instr.constIndex * 3 + instr.constIndexSelect;
++        strideDwords = instr.stride;
++        lastVfetchSlot = fetchSlot;
++        lastVfetchStride = strideDwords;
++    }
++
+     if (instr.isPredicated)
+     {
+         indent();
+@@ -204,19 +222,33 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
+     out += " = ";
+ 
+     auto findResult = vertexElements.find(address);
+-    assert(findResult != vertexElements.end());
+     if (findResult == vertexElements.end())
+     {
+-        // A vfetch with no declared vertex element (seen in retail Fable2:
+-        // vs_f50f743ba7865294) dereferenced end() and crashed the whole
+-        // translation. Emit a neutral constant instead — the shader still
+-        // compiles; the undeclared attribute reads as (0,0,0,1).
+-        out += "float4(0.0, 0.0, 0.0, 1.0).";
++        // No declared vertex element for this vfetch. Since §3z the container
++        // synthesizer deliberately omits DEPENDENT fetches (address register is
++        // not the auto vertex index) from the declaration list, and they are
++        // emitted here as a raw load from the stream itself at the index the
++        // shader computed — see XeVfetchDep in shader_common.h and
++        // docs/world-era-fatal-and-selector.md §3z. The runtime publishes the
++        // stream's device address per draw; a missing entry reads as zero,
++        // which is also the old fallback behaviour for the genuinely
++        // undeclared direct fetch (vs_f50f743ba7865294).
++        static const std::set<uint32_t> knownFormats = {6, 7, 16, 25, 26, 31,
++                                                        32, 33, 36, 37, 38, 57};
++        if (knownFormats.find(instr.format) == knownFormats.end())
++            fprintf(stderr,
++                    "[XenosRecomp] dependent vfetch with UNHANDLED format %u "
++                    "(addr %u slot %u) — reads as zero, extend XeVfetchDep\n",
++                    uint32_t(instr.format), address, fetchSlot);
++        print("XeVfetchDep({}u, r{}.{}, {}u, {}u, {}, {}u, {}u, {}u)",
++              fetchSlot, uint32_t(instr.srcRegister),
++              "xyzw"[instr.srcSwizzle & 0x3], instr.isIndexRounded ? 1u : 0u,
++              strideDwords, int32_t(instr.offset), uint32_t(instr.format),
++              instr.formatCompAll ? 1u : 0u, instr.numFormatAll ? 1u : 0u);
++        out += '.';
+         printDstSwizzle(instr.dstSwizzle, true);
+         out += ";\n";
+         printDstSwizzle01(instr.dstRegister, instr.dstSwizzle);
+-        fprintf(stderr, "[XenosRecomp] vfetch with undeclared vertex element (addr %u)\n",
+-                address);
+         if (instr.isPredicated)
+         {
+             --indentation;
+diff --git a/XenosRecomp/shader_recompiler.h b/XenosRecomp/shader_recompiler.h
+index b2e317d..abb79ac 100644
+--- a/XenosRecomp/shader_recompiler.h
++++ b/XenosRecomp/shader_recompiler.h
+@@ -33,6 +33,12 @@ struct ShaderRecompiler : StringBuffer
+     std::unordered_map<uint32_t, const char*> samplers;
+     std::unordered_map<uint32_t, uint32_t> ifEndLabels;
+     uint32_t specConstantsMask = 0;
++    // Mini-fetch inheritance (Fable2 §3z dependent vertex fetch): a vfetch with
++    // isMiniFetch shares the previous full vfetch's fetch constant and stride.
++    // Tracked here because the dependent-fetch emit path needs the EFFECTIVE
++    // slot/stride, and recompile() sees instructions in program order.
++    uint32_t lastVfetchSlot = 0;
++    uint32_t lastVfetchStride = 0;
+ 
+ #ifdef UNLEASHED_RECOMP
+     bool hasMtxProjection = false;
+-- 
+2.55.0
+

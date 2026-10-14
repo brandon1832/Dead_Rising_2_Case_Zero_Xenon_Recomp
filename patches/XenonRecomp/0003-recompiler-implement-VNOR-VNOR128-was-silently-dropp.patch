@@ -1,0 +1,54 @@
+From 4a350d032537c207b2f36e7db947b33012960b17 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Fri, 24 Jul 2026 23:28:28 -0400
+Subject: [PATCH 03/14] recompiler: implement VNOR / VNOR128 (was silently
+ dropped)
+
+vnor vD,vA,vB (= ~(vA | vB)) had no case in the instruction switch, so it fell
+through to the comment-only default: the generated code emitted the `// vnor`
+comment but NO implementation, leaving the destination register stale.
+
+This corrupts any code that consumes the vnor result. In Fable 2 it broke the
+world-mesh local-bbox min/max reduce (sub_82269FA0): `vnor v8,v11,v11` computes
+the inverted compare mask ~(v0>=oldmin) that the next `vsel` uses to select the
+new min. With vnor dropped, v8 held a stale transformed-position vector, so the
+vsel selected lanes arbitrarily -> the min settled at +FLT_MAX/1e34-scale garbage
+on some lanes -> degenerate world AABB -> distance-cull -> the 3D world never drew.
+
+Emit ~(a|b) as xor(or(a,b), all-ones), mirroring the VOR handler's same-operand
+fast path. All 54 vnor sites in the Fable 2 recompile now generate code; the
+world-mesh bbox reduce settles finite (6978: 13/31 -> 26/28 finite nodes;
+66C8: 2/33 -> 30/33).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ XenonRecomp/recompiler.cpp | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
+index 128164f..c5b10d0 100644
+--- a/XenonRecomp/recompiler.cpp
++++ b/XenonRecomp/recompiler.cpp
+@@ -1969,6 +1969,19 @@ bool Recompiler::Recompile(
+         println("\tsimde_mm_store_ps({}.f32, simde_mm_xor_ps(simde_mm_sub_ps(simde_mm_mul_ps(simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32)), simde_mm_load_ps({}.f32)), simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]), v(insn.operands[3]));
+         break;
+ 
++    case PPC_INST_VNOR:
++    case PPC_INST_VNOR128:
++        // vnor vD,vA,vB : vD = ~(vA | vB). NOT via xor with all-ones.
++        print("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_xor_si128(", v(insn.operands[0]));
++
++        if (insn.operands[1] != insn.operands[2])
++            print("simde_mm_or_si128(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8))", v(insn.operands[1]), v(insn.operands[2]));
++        else
++            print("simde_mm_load_si128((simde__m128i*){}.u8)", v(insn.operands[1]));
++
++        println(", simde_mm_set1_epi32(-1)));");
++        break;
++
+     case PPC_INST_VOR:
+     case PPC_INST_VOR128:
+         print("\tsimde_mm_store_si128((simde__m128i*){}.u8, ", v(insn.operands[0]));
+-- 
+2.55.0
+

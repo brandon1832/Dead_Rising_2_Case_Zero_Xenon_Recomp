@@ -1,0 +1,201 @@
+From af19bad83954f840a05614d9dea9badcad36c0cf Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Mon, 10 Aug 2026 22:48:02 -0400
+Subject: [PATCH 18/23] Four shader instruments, emitted always and compiled
+ only under their defines
+
+Case Zero renders large flat patches of exactly rgb(180,180,180) that do not vary with the
+scene lighting, and nothing outside the shaders could say why. These make the shader
+itself answerable, as arms rather than as a rebuild: each block is emitted unconditionally
+and compiles only when its define is passed, so the DEFAULT cache rebuilds 410 of 410
+modules byte for byte and a consumer selects an instrumented cache at run time.
+
+  XE_NAN_PAINT     paint magenta where oC0 went NaN.
+  XE_VALUE_PAINT   paint green where the grey output is within eps of a given value.
+  XE_SHADER_TAG    with VALUE_PAINT, encode the shader's own hash into the painted pixel
+                   (hi, 255, lo), so a frame NAMES the shaders instead of the reader
+                   inferring them from the picture.
+  XE_FLOOR_PAINT   record whether any max whose operands DIFFER took its second operand.
+                   max(a, a) is this compiler's mov and would set the flag everywhere.
+
+Every one has a positive control, and that is not optional: "no magenta" is only a result
+once a forced variant has shown 99%+. XE_NAN_PAINT_FORCE and a large XE_VALUE_PAINT_EPS
+measured 99.85% and 99.73% of the frame respectively.
+
+Two mistakes found by running these rather than reading them, both recorded in the
+comments: the ALU path cannot see which stage it is in, so declaring the floor flag only
+for pixel shaders failed 25 vertex shaders; and a max is not always emitted at statement
+position -- one shader has one inside saturate(...) -- so the flag update had to become an
+expression, via the xe_max overload set now in shader_common.h.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ XenosRecomp/shader_common.h       |  12 ++++
+ XenosRecomp/shader_recompiler.cpp | 116 +++++++++++++++++++++++++++++-
+ 2 files changed, 127 insertions(+), 1 deletion(-)
+
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index eaa9b4d..7800543 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -440,3 +440,15 @@ float computeMipLevel(float2 pixelCoord)
+ #endif
+ 
+ #endif
++
++// XE_FLOOR_PAINT — see the note at AluVectorOpcode::Max in shader_recompiler.cpp. The
++// flag update has to be an EXPRESSION, not a statement: a `max` is not always emitted at
++// statement position (one Case Zero shader has one inside `saturate(...)`), and injecting
++// a line there produced `saturate(\n xe_floor = ...; \n max(...))`. An overload set is the
++// portable way to have a side effect inside an expression in HLSL.
++#ifdef XE_FLOOR_PAINT
++float  xe_max(float  a, float  b, inout bool f) { f = f || (b > a);      return max(a, b); }
++float2 xe_max(float2 a, float2 b, inout bool f) { f = f || any(b > a);   return max(a, b); }
++float3 xe_max(float3 a, float3 b, inout bool f) { f = f || any(b > a);   return max(a, b); }
++float4 xe_max(float4 a, float4 b, inout bool f) { f = f || any(b > a);   return max(a, b); }
++#endif
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 830956e..6ba05cd 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -993,8 +993,39 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+ 
+         case AluVectorOpcode::Max:
+         case AluVectorOpcode::MaxA:
+-            print("max({}, {})", op(VECTOR_0), op(VECTOR_1));
++        {
++            // XE_FLOOR_PAINT — did a REAL max take its second operand?
++            //
++            // Case Zero's white plateau is the value its shared tone epilogue emits when
++            // `max(colour, K1)` returns K1 and the `-r1*r1` term is zero:
++            // `sqrt(K1*K2) = sqrt(0.5) = 180/255`, for any exposure. Two readings fit
++            // that and they differ only in whether the max is a TIE (the colour sitting
++            // exactly on the operator's knee) or a genuine FLOOR (the colour below it and
++            // r1 stale). Nothing downstream can tell them apart, because both produce the
++            // same output — so the discriminator has to be recorded where the max happens.
++            //
++            // `max(a, a)` is this compiler's `mov` and is everywhere, so only maxes whose
++            // operands DIFFER textually are instrumented; the mov idiom would otherwise
++            // set the flag on every shader and the instrument would saturate under its
++            // own noise.
++            const std::string a = op(VECTOR_0), b = op(VECTOR_1);
++            if (a != b)
++            {
++                // An EXPRESSION, not an injected statement: a max is not always emitted at
++                // statement position, and a line inserted inside `saturate(...)` does not
++                // compile. `xe_max` is defined in shader_common.h under the same define.
++                out += "\n#ifdef XE_FLOOR_PAINT\n\t\t\txe_max(";
++                out += a + ", " + b + ", xe_floor)";
++                out += "\n#else\n\t\t\t";
++                print("max({}, {})", a, b);
++                out += "\n#endif\n\t\t\t";
++            }
++            else
++            {
++                print("max({}, {})", a, b);
++            }
+             break;
++        }
+ 
+         case AluVectorOpcode::Min:
+             print("min({}, {})", op(VECTOR_0), op(VECTOR_1));
+@@ -1878,6 +1909,13 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         out += "\n";
+     }
+ 
++    // The XE_FLOOR_PAINT flag, declared once per shader alongside the temporaries. See
++    // the note at AluVectorOpcode::Max. Declared in VERTEX shaders too even though only a
++    // pixel shader reads it: the max instrumentation is emitted from the shared ALU path
++    // and cannot see which stage it is in, so declaring it only for pixel shaders failed
++    // 25 vertex shaders on an undeclared identifier.
++    out += "#ifdef XE_FLOOR_PAINT\n\tbool xe_floor = false;\n#endif\n";
++
+     for (size_t i = 0; i < 64; i++)
+     {
+         if (!printedRegisters[i])
+@@ -2231,6 +2269,82 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+             {
+                 if (isPixelShader)
+                 {
++                    // XE_NAN_PAINT — a POSITIVE CONTROL for "did this pixel's colour go
++                    // NaN". Emitted always and compiled only when the define is passed,
++                    // so one emitter produces both arms and the default cache is byte
++                    // for byte what it was.
++                    //
++                    // Dead Rising 2: Case Zero renders large flat patches of exactly
++                    // rgb(180,180,180) — ground, slot machines, newspaper boxes — that do
++                    // not vary with the scene lighting at all. Its shaders end with
++                    // `sqrt((max(c, 1.0) - r1*r1) * 0.5)`, and a NaN reaching that tail is
++                    // laundered into a constant: `saturate(NaN)` is 0 and `max(NaN, 1.0)`
++                    // returns 1.0, giving exactly `sqrt(0.5)` = 0.70711 = 180/255. Every
++                    // property of the plateau follows from that, which is a hypothesis and
++                    // not a finding until something can see the NaN itself.
++                    //
++                    // Magenta rather than a counter because the question is WHICH PIXELS,
++                    // and because it is refutable: if the plateau stays 180 with this on,
++                    // the value never was a NaN and the theory dies in one run.
++                    // XE_NAN_PAINT_FORCE=1 paints unconditionally: the POSITIVE CONTROL,
++                    // and it is not optional. "No magenta" from the detector is only a
++                    // result once the detector has been shown capable of producing
++                    // magenta — otherwise it is equally consistent with the define never
++                    // compiling in, `isnan` being folded away by the optimiser, or the
++                    // painted shaders never being bound in the frame that was measured.
++                    // XE_VALUE_PAINT=<v> [XE_VALUE_PAINT_EPS=<e>] — paint GREEN where the
++                    // shader's own grey output is within e of v.
++                    //
++                    // The question it answers is prior to every question about WHY: did a
++                    // material shader produce this value at all? Case Zero's white patches
++                    // are exactly rgb(180,180,180) in the scene buffer, across surfaces
++                    // with different materials, different shaders and different constants
++                    // — and one value out of many shaders cannot come from any one
++                    // shader's constants. Either something they share emits it, or the
++                    // material shaders never wrote it and it arrives from the resolve or
++                    // the EDRAM path, which is a different subsystem entirely.
++                    //
++                    // Green rather than magenta so it can be read in the same run as
++                    // XE_NAN_PAINT. Its own positive control needs no extra define: a
++                    // large XE_VALUE_PAINT_EPS paints every pixel.
++                    out += "#ifdef XE_VALUE_PAINT\n";
++                    out += "#ifndef XE_VALUE_PAINT_EPS\n";
++                    out += "#define XE_VALUE_PAINT_EPS 0.004\n";
++                    out += "#endif\n";
++                    out += "\tif (all(abs(oC0.rgb - (XE_VALUE_PAINT)) < "
++                           "(XE_VALUE_PAINT_EPS)))\n";
++                    // WITH A TAG, THE PICTURE NAMES THE SHADER. `XE_SHADER_TAG` is the
++                    // low 16 bits of the shader's own hash, passed per module by
++                    // build_shader_spv.sh, written as (hi, 255, lo). Green stays pinned at
++                    // 255 as the marker so the decoder has something to select on, and the
++                    // two payload bytes go in R and B. Without it the paint is plain green
++                    // and says only THAT a shader emitted the value, which is the question
++                    // one round earlier.
++                    // With XE_FLOOR_PAINT the two readings get two colours, which is the
++                    // whole point: MAGENTA where a real max took its floor (the colour is
++                    // BELOW the knee and the `-r1*r1` term is dead), GREEN where none did
++                    // (the colour is sitting exactly ON the knee). One run separates them.
++                    out += "#ifdef XE_FLOOR_PAINT\n";
++                    out += "\t\toC0 = xe_floor ? float4(1.0, 0.0, 1.0, 1.0)\n";
++                    out += "\t\t              : float4(0.0, 1.0, 0.0, 1.0);\n";
++                    out += "#else\n";
++                    out += "#ifdef XE_SHADER_TAG\n";
++                    out += "\t\toC0 = float4(float(((XE_SHADER_TAG) >> 8) & 255) / 255.0,"
++                           " 1.0, float((XE_SHADER_TAG) & 255) / 255.0, 1.0);\n";
++                    out += "#else\n";
++                    out += "\t\toC0 = float4(0.0, 1.0, 0.0, 1.0);\n";
++                    out += "#endif\n";
++                    out += "#endif\n";
++                    out += "#endif\n";
++
++                    out += "#ifdef XE_NAN_PAINT\n";
++                    out += "#ifndef XE_NAN_PAINT_FORCE\n";
++                    out += "#define XE_NAN_PAINT_FORCE 0\n";
++                    out += "#endif\n";
++                    out += "\tif (any(isnan(oC0)) || XE_NAN_PAINT_FORCE)\n";
++                    out += "\t\toC0 = float4(1.0, 0.0, 1.0, 1.0);\n";
++                    out += "#endif\n";
++
+                     specConstantsMask |= SPEC_CONSTANT_ALPHA_TEST;
+ 
+                     indent();
+-- 
+2.55.0
+

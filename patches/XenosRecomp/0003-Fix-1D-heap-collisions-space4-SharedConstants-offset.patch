@@ -1,0 +1,59 @@
+From 011a1b7f8169ae573b9845cd65292874da3c631f Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Thu, 16 Jul 2026 01:20:57 -0400
+Subject: [PATCH 03/23] Fix 1D heap collisions: space4 + SharedConstants offset
+ 288/c18
+
+---
+ XenosRecomp/shader_common.h       | 2 +-
+ XenosRecomp/shader_recompiler.cpp | 8 ++++----
+ 2 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index 896b2eb..67f7e3f 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -50,7 +50,7 @@ uint g_SpecConstants();
+ Texture2D<float4> g_Texture2DDescriptorHeap[] : register(t0, space0);
+ Texture3D<float4> g_Texture3DDescriptorHeap[] : register(t0, space1);
+ TextureCube<float4> g_TextureCubeDescriptorHeap[] : register(t0, space2);
+-Texture1D<float4> g_Texture1DDescriptorHeap[] : register(t0, space3); // Fable2: menu LUTs
++Texture1D<float4> g_Texture1DDescriptorHeap[] : register(t0, space4); // Fable2: menu LUTs (own space: s0/space3 is the sampler heap)
+ SamplerState g_SamplerDescriptorHeap[] : register(s0, space3);
+ 
+ uint2 getTexture2DDimensions(Texture2D<float4> texture)
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index a770792..596a3fe 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -1175,11 +1175,11 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+             for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
+             {
+                 println("#define {}_Texture{}DescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})",
+-                    constantName, TEXTURE_DIMENSIONS[j], j * 64 + constantInfo->registerIndex * 4);
++                    constantName, TEXTURE_DIMENSIONS[j], (j == 3 ? 288 : j * 64) + constantInfo->registerIndex * 4);
+             }
+ 
+             println("#define {}_SamplerDescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})",
+-                constantName, std::size(TEXTURE_DIMENSIONS) * 64 + constantInfo->registerIndex * 4);
++                constantName, 192 + constantInfo->registerIndex * 4);
+ 
+             samplers.emplace(constantInfo->registerIndex, constantName);
+             break;
+@@ -1234,11 +1234,11 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+             for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
+             {
+                 println("\tuint {}_Texture{}DescriptorIndex : packoffset(c{}.{});",
+-                    constantName, TEXTURE_DIMENSIONS[j], j * 4 + constantInfo->registerIndex / 4, SWIZZLES[constantInfo->registerIndex % 4]);
++                    constantName, TEXTURE_DIMENSIONS[j], (j == 3 ? 18 : j * 4) + constantInfo->registerIndex / 4, SWIZZLES[constantInfo->registerIndex % 4]);
+             }
+ 
+             println("\tuint {}_SamplerDescriptorIndex : packoffset(c{}.{});",
+-                constantName, 4 * std::size(TEXTURE_DIMENSIONS) + constantInfo->registerIndex / 4, SWIZZLES[constantInfo->registerIndex % 4]);
++                constantName, 12 + constantInfo->registerIndex / 4, SWIZZLES[constantInfo->registerIndex % 4]);
+         }
+     }
+ 
+-- 
+2.55.0
+

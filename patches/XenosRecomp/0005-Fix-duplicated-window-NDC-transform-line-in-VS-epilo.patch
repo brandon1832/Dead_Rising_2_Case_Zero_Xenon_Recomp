@@ -1,0 +1,33 @@
+From 37291b959e0e6b67ec6988bc781cd4f0a6808ba3 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Fri, 17 Jul 2026 01:48:30 -0400
+Subject: [PATCH 05/23] Fix duplicated window->NDC transform line in VS
+ epilogue
+
+d3778f2 accidentally emitted the g_PosScale/g_PosOffset transform twice;
+applying it twice collapses all geometry toward the NDC origin offset.
+The menu-era SPVs that rendered correctly were built from a pre-duplication
+working tree, so the bug only bit on the next rebuild.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ XenosRecomp/shader_recompiler.cpp | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 56e5ba0..62fc57f 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -1824,8 +1824,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                 #endif
+                     {
+                         out += "\toPos.xy = oPos.xy * g_PosScale + g_PosOffset * oPos.w;\n";
+-                        out += "\toPos.xy = oPos.xy * g_PosScale + g_PosOffset * oPos.w;\n";
+-        out += "\toPos.xy += g_HalfPixelOffset * oPos.w;\n";
++                        out += "\toPos.xy += g_HalfPixelOffset * oPos.w;\n";
+                     }
+                 }
+ 
+-- 
+2.55.0
+

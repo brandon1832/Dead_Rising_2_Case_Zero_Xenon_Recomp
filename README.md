@@ -3,7 +3,8 @@
 **To play with online feature download it from the [XenonLive launcher](https://github.com/wivi514/XenonLive_Launcher)**
 
 Play **Dead Rising 2: Case Zero** (Capcom / Blue Castle Games, 2010 — the Xbox
-360 exclusive prologue to Dead Rising 2) natively on your Windows or Linux PC.
+360 exclusive prologue to Dead Rising 2) natively on Windows, Linux, the Steam
+Deck and Apple Silicon Macs.
 
 This is not an emulator: the game's Xbox 360 code was translated ahead of time
 into a native program ([XenonRecomp](https://github.com/hedge-dev/XenonRecomp) /
@@ -11,10 +12,13 @@ into a native program ([XenonRecomp](https://github.com/hedge-dev/XenonRecomp) /
 purpose-built engine with a Vulkan renderer, real XMA audio, and native
 keyboard/mouse support.
 
-> **Status: essentially complete.** The game is **100% playable start to
-> finish** — it has been completed end to end on both Windows and Linux — and
-> should look right in nearly all places. A few minor issues remain (listed
-> below); none block progress.
+> **Status: finished. v1.1.3 (October 2026) is the final release.** The game is
+> **100% playable start to finish**, solo and in two-player online co-op, and has
+> been completed end to end on Windows and Linux. The maintainer has stopped
+> working on the project: no further updates are planned, and issues and pull
+> requests may go unanswered. The code and the full development record stay
+> here for anyone who wants to pick it up (see
+> [For developers and other porters](#for-developers-and-other-porters)).
 
 **No game data is included** in this repository or the downloads. You must own
 Dead Rising 2: Case Zero and supply your own copy of the game package. This
@@ -25,9 +29,14 @@ project is not affiliated with, or endorsed by, Capcom or Microsoft.
 1. **Download** the release for your system from the
    [Releases](../../releases) page:
    - Windows: `CaseZeroRecomp-windows-x86_64.zip`
-   - Linux: `CaseZeroRecomp-linux-x86_64.tar.zst`
+   - Linux: `CaseZeroRecomp-linux-x86_64.tar.zst` (or the `.AppImage`)
+   - Steam Deck: `CaseZeroRecomp-steamdeck-x86_64.tar.gz`
+   - Mac (M1 or newer): `CaseZeroRecomp-macos-arm64.zip`
 2. **Unpack it anywhere** (Windows: right-click → Extract All; Linux:
-   `tar --zstd -xf CaseZeroRecomp-linux-x86_64.tar.zst`).
+   `tar --zstd -xf CaseZeroRecomp-linux-x86_64.tar.zst`; Mac: double-click the zip,
+   then run `xattr -dr com.apple.quarantine <the unzipped folder>` once in Terminal —
+   the Mac build is not notarised by Apple, and without this macOS refuses it or runs
+   it from a hidden location where it cannot find its `assets` folder).
 3. **Add your copy of the game.** You need the XBLA package file your Xbox 360
    downloaded — about **825 MB**, no file extension. On the console's storage
    it is at:
@@ -37,7 +46,8 @@ project is not affiliated with, or endorsed by, Capcom or Microsoft.
    Copy that file into the `assets/package/` folder inside the game folder you
    just unpacked (copying the whole `58410A8D` folder in also works — or just
    drag the file onto the launcher window in step 4).
-4. **Run the game** — `cz_runtime.exe` on Windows, `./cz_runtime` on Linux.
+4. **Run the game** — `cz_runtime.exe` on Windows, `./cz_runtime` on Linux,
+   `CaseZeroRecomp.app` on a Mac (keep it in the same folder as `assets`).
    The first run sets everything up by itself under a progress bar: it unpacks
    your package, prepares the game's 1,367 shaders (~10 seconds), and generates
    the menu and prompt assets from your data. Later launches go straight into
@@ -57,7 +67,8 @@ sends for you.
 
 Your **saves and settings live outside the game folder** (Windows:
 `Saved Games\Dead Rising 2 Case Zero\`; Linux:
-`~/.local/share/Dead Rising 2 Case Zero/`), so you can delete or replace the
+`~/.local/share/Dead Rising 2 Case Zero/`; Mac:
+`~/Library/Application Support/Dead Rising 2 Case Zero/`), so you can delete or replace the
 game folder at any time without losing progress.
 
 ## Controls
@@ -80,9 +91,8 @@ game folder at any time without losing progress.
   code and never showed: JOIN CO-OP GAME on the main menu, a friends list to
   join from, and the host asked before anyone comes in — over
   [XenonLive](https://github.com/wivi514/XenonLive_Launcher), through its
-  [launcher](https://github.com/wivi514/XenonLive_Launcher). The military
-  arrival at the end of the game is single-player for now: the second player
-  is dropped there rather than crash the host (a fix is in progress).
+  [launcher](https://github.com/wivi514/XenonLive_Launcher). Playable to the
+  ending together (v1.1.3), each player on his own motorcycle.
 - **Level cap raised to 50** (the original XBLA release stopped Chuck at
   level 5) with all fifteen skills unlockable — Case Zero as a full game,
   not a demo-sized one.
@@ -90,7 +100,10 @@ game folder at any time without losing progress.
   pacing remains available as a setting, along with higher caps.
 - **The restored PC options screen**: the Xbox build ships a dormant PC
   graphics menu; this port revives it in-game — resolution (720p up to 5K,
-  applies live without a restart), display mode, vsync, shadow quality.
+  applies live without a restart), display mode, vsync, shadow quality — plus
+  ZOMBIE DETAIL, WORLD DETAIL and SHADOW BIAS (v1.1.3), which bring distant
+  zombies, buildings and overhang shadows in from much further away than the
+  Xbox did.
 - **21:9 ultrawide support** — pick an ultrawide resolution (e.g. 3440×1440)
   and the game renders true widescreen. **Tip:** raise Field of View to at
   least **+10** in the options when playing ultrawide — at the stock FOV the
@@ -108,31 +121,27 @@ game folder at any time without losing progress.
 - **Windows**: Windows 10 or later, x86-64.
 - **Linux**: x86-64 with glibc **2.35 or newer** from v1.0.2 (v1.0.1 needed
   2.43 — see known issues). An AppImage is provided from v1.0.2.
-- **Steam Deck**: not yet verified. v1.0.1 cannot start there (glibc); v1.0.2's
-  Linux build removes that cause but has not been run on a Deck by anyone on the
-  project. **If you try it, use the `.tar.zst` rather than the AppImage** — you have
-  to keep an 825 MB package and ~2 GB of unpacked data in the folder either way, so
-  the single file buys nothing and the AppImage adds a FUSE dependency. Do the first
-  run in Desktop Mode: it takes about a minute and Game Mode shows no progress
-  console. `docs/steam-deck-testing.md` says exactly what to try and what to send
-  back.
+- **Steam Deck**: use `CaseZeroRecomp-steamdeck-x86_64.tar.gz` (no launcher,
+  native 1280x800, the detail settings at the original values for performance). Do
+  the first run in Desktop Mode: it takes about a minute and Game Mode shows no
+  progress console. `docs/steam-deck-testing.md` has the details.
+- **macOS**: an Apple Silicon Mac (M1 or newer) on macOS 13 or later. Intel Macs
+  are not supported.
 - **~2 GB free disk space** after first-run unpacking.
 - **Your own copy of the game** (see above).
 
 ## Known issues (minor — none affect playability)
 
-- A subtle **shading flicker on Chuck's hair** in motion
-  (`docs/hair-flicker-part92.md` tracks it).
-- The occasional spot may shade slightly differently than original hardware;
-  everything is being tracked and refined.
+- The occasional spot may shade slightly differently than original hardware
+  (highlight brightness in particular is not exactly the Xbox's).
+- Some rooftop props and sign lettering can pop in and out as you cross a
+  streaming boundary, and the large "LAS VEGAS 46" sign can show holes while the
+  camera moves (`docs/las-vegas-sign-holes.md`).
 - **Linux glibc floor**: v1.0.1 refuses to start on distributions below glibc
   2.43 with a `GLIBC_x.yz not found` message (that includes every SteamOS).
   v1.0.2 is built on an older base (floor 2.35) and also ships as an AppImage.
-- **Steam Deck**: untested by the project — see Requirements for which download to
-  use. The Windows build under Proton is likewise untested and is the fallback, not
-  the path to try first; on the dev box the same zip runs end to end under Wine 11,
-  so a Deck failure there would be new information — please report it with
-  `PROTON_LOG=1`.
+- **Steam Deck**: use the dedicated Steam Deck download. The Windows build under
+  Proton is the fallback, not the path to try first.
 - **macOS (v1.1.3, Apple Silicon only) is an early build**: tested on one M1, where it
   plays; it can freeze when left idle for ~15 minutes and runs at ~40 fps there. Run
   `xattr -dr com.apple.quarantine <the unzipped folder>` once before the first launch
@@ -196,15 +205,22 @@ cmake --build runtime/build -j$(nproc)
 
 CI (`.github/workflows/build.yml`) builds the host runtime on both platforms
 on every push — it proves the host code compiles; it cannot run the game.
+macOS is built on the Mac itself (`docs/macos-build-setup.md`,
+`tools/release_package_macos.sh`).
 
 ## For developers and other porters
 
 `docs/` is this project's full working memory, written for an outside reader
 porting a *different* Xbox 360 title with the same pipeline: the findings
-ledger, the 500-entry gotcha list, the `.big`/STFS/XEX format notes, the
+ledger, the 640-entry gotcha list, the `.big`/STFS/XEX format notes, the
 renderer and audio build-out records, and the measurement discipline that kept
 it honest. Start with `docs/xenia-capture-analysis.md` and `docs/gotchas.md`.
 The original day-1 dev README is preserved at `docs/dev-readme-day1.md`.
+
+**If you want to continue the port**, `docs/final-state.md` is the hand-off: what
+works, what is open and where each open item's record lives, and how a release is
+built on each platform. The licence (PolyForm Noncommercial) allows forks for
+non-commercial use.
 
 ## For speedrunners
 
@@ -213,15 +229,14 @@ autosplitter does not have to chase pointers through a binary that gets rebuilt 
 **[`docs/speedrunning.md`](docs/speedrunning.md)** is the complete interface: the field
 layout, the cutscene names, example readers, and what is verified versus what is not.
 
-Requests for extra fields are welcome — there is room reserved for them, and adding one
-breaks nobody.
+The v1 layout is final: v1.1.3 is the last release, so no fields will be added. A fork
+that adds some should keep the v1 offsets and use the reserved tail, as the document says.
 
 ## Support the project
 
-If this port made your day and you'd like to support the work,
-[**sponsor me on GitHub**](https://github.com/sponsors/wivi514) — it helps
-keep improvements coming (and future ports: Dead Rising 2: Case West is
-next). Bug reports and issues are just as valuable.
+The project is finished and no longer maintained. If it made your day and you'd
+like to say thanks, [**GitHub Sponsors**](https://github.com/sponsors/wivi514) is
+still there — but please don't sponsor expecting further updates to this port.
 
 ## Credits and licensing
 

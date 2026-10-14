@@ -1,0 +1,144 @@
+From 4fa2eb71ea6161f6f68d4342796dd2224eb98dec Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Mon, 3 Aug 2026 18:30:56 -0400
+Subject: [PATCH 09/14] vpkd3d128: implement the float16_2 pack (type 3)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Only types 0 (D3DCOLOR) and 5 (float16_4) were emitted; type 3 fell through to
+__builtin_debugtrap(). Asura's Wrath hits it in four places and the boot died
+there once its jump tables were fixed.
+
+Type 3 is float16_2 — the matching VUPKD3D128 already implements it under that
+name, and the two are now exact inverses. Lane mapping, derived from that unpack
+and confirmed at the call sites:
+
+  guest x = storage lane 3 -> HIGH half of the destination word
+  guest y = storage lane 2 -> LOW  half
+
+x lands in the high half because a guest word is big-endian, so the component at
+the LOWER address is the high half of the little-endian u32 — the same reason
+VUPKD3D128's float16_2 reads x from u16[1] and y from u16[0].
+
+Confirmed rather than assumed: every call site follows the pack with
+`vspltisw128 vX,0; vpkd3d128 vX,vY,3,1,3; vspltw128 vX,vX,0; stvewx128` and then
+rebuilds the value as `(second_halfword << 16) | first_halfword`. The splat
+permutes with 3 - n, so operand 4 == 3 must select storage word 3 — which it
+does — and the recombination requires x in the lower-addressed half.
+
+The float32 -> float16 conversion is now a `packHalf(srcLane, dstHalf)` lambda
+shared by both float16 packs, so they cannot drift. It stays longhand rather than
+a host cvtps_ph because the guest's denormal rounding and 0x7FFF saturation are
+observable in vertex data.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ XenonRecomp/recompiler.cpp | 69 +++++++++++++++++++++++++++++---------
+ 1 file changed, 54 insertions(+), 15 deletions(-)
+
+diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
+index 511c21e..385f593 100644
+--- a/XenonRecomp/recompiler.cpp
++++ b/XenonRecomp/recompiler.cpp
+@@ -2260,9 +2260,39 @@ bool Recompiler::Recompile(
+     }
+ 
+     case PPC_INST_VPKD3D128:
++    {
+         // TODO: vectorize somehow?
+         // NOTE: handling vector reversal here too
++        //
++        // operands[2] = pack type, [3] = number of destination words written,
++        // [4] = the destination word. Under the full vector reversal, storage word
++        // `operands[4]` is guest word `3 - operands[4]`, which is what `vspltw128
++        // vX,vX,0` downstream of a float16_2 pack picks up (it permutes with 3 - n).
+         printSetFlushMode(true);
++
++        // float32 -> float16 for ONE lane: vB's storage lane `srcLane` into vD's
++        // storage halfword `dstHalf`. Shared by the float16_2 and float16_4 packs so
++        // the two cannot drift — it is the same conversion and only the lane mapping
++        // differs. Written out longhand rather than via a host cvtps_ph because the
++        // guest's rounding of denormals and its 0x7FFF saturation are both observable
++        // in vertex data.
++        auto packHalf = [&](size_t srcLane, size_t dstHalf)
++        {
++            // Strip sign from source
++            println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", temp(), v(insn.operands[1]), srcLane);
++            // If |source| is > 65504, clamp output to 0x7FFF, else save 8 exponent bits
++            println("\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 > 65504.0f) ? 0xFF : (({2}.u32[{3}]&0x7f800000)>>23);", vTemp(), temp(), v(insn.operands[1]), srcLane);
++            // If 8 exponent bits were saved, it can only be 0x8E at most
++            // If saved, save first 10 bits of mantissa
++            println("\t{}.u16 = {}.u8[0] != 0xFF ? (({}.u32[{}]&0x7FE000)>>13) : 0x0;", temp(), vTemp(), v(insn.operands[1]), srcLane);
++            // If saved and > 127-15, exponent is converted from 8 to 5-bit by subtracting 0x70
++            // If saved but not > 127-15, clamp exponent at 0, add 0x400 to mantissa and shift right by (0x71-exponent)
++            // If right shift is greater than 31 bits, manually clamp mantissa to 0 or else the output of the shift will be wrong
++            println("\t{0}.u16[{1}] = {2}.u8[0] != 0xFF ? ({2}.u8[0] > 0x70 ? ((({2}.u8[0]-0x70)<<10)+{3}.u16) : (0x71-{2}.u8[0] > 31 ? 0x0 : ((0x400+{3}.u16)>>(0x71-{2}.u8[0])))) : 0x7FFF;", v(insn.operands[0]), dstHalf, vTemp(), temp());
++            // Add back original sign
++            println("\t{}.u16[{}] |= (({}.u32[{}]&0x80000000)>>16);", v(insn.operands[0]), dstHalf, v(insn.operands[1]), srcLane);
++        };
++
+         switch (insn.operands[2])
+         {
+         case 0: // D3D color
+@@ -2279,26 +2309,34 @@ bool Recompiler::Recompile(
+             println("\t{}.u32[{}] = {}.u32;", v(insn.operands[0]), insn.operands[4], temp());
+             break;
+ 
++        case 3: // float16_2
++            // The inverse of VUPKD3D128's float16_2. That unpack reads the packed word
++            // as (x = high half, y = low half) and yields guest (x, y, 0.0, 1.0); the
++            // halves are that way round because a guest word is big-endian, so the
++            // component at the LOWER address is the high half of the little-endian u32.
++            // Packing therefore puts vB's guest x (storage lane 3) in the high half of
++            // the destination word and guest y (storage lane 2) in the low half.
++            //
++            // Confirmed against the call sites in Asura's Wrath, which follow the pack
++            // with `vspltw128 vX,vX,0; stvewx128` and then rebuild the value as
++            // `(second_halfword << 16) | first_halfword` — i.e. x must land in the
++            // lower-addressed half, which is the high half of the stored word.
++            if (insn.operands[3] != 1)
++                fmt::println("Unexpected float16_2 pack instruction at {:X}", base);
++
++            packHalf(3, 2 * insn.operands[4] + 1); // guest x -> high half
++            packHalf(2, 2 * insn.operands[4] + 0); // guest y -> low half
++            break;
++
+         case 5: // float16_4
++            // Storage lane i -> storage halfword i + 2*shift, the identity mapping the
++            // matching unpack documents. Two destination words, so a shift of 3 would
++            // run off the end of the register.
+             if (insn.operands[3] != 2 || insn.operands[4] > 2)
+                 fmt::println("Unexpected float16_4 pack instruction at {:X}", base);
+ 
+             for (size_t i = 0; i < 4; i++)
+-            {
+-        		// Strip sign from source
+-        		println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", temp(), v(insn.operands[1]), i);
+-        		// If |source| is > 65504, clamp output to 0x7FFF, else save 8 exponent bits 
+-        		println("\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 > 65504.0f) ? 0xFF : (({2}.u32[{3}]&0x7f800000)>>23);", vTemp(), temp(), v(insn.operands[1]), i);
+-        		// If 8 exponent bits were saved, it can only be 0x8E at most
+-        		// If saved, save first 10 bits of mantissa
+-        		println("\t{}.u16 = {}.u8[0] != 0xFF ? (({}.u32[{}]&0x7FE000)>>13) : 0x0;", temp(), vTemp(), v(insn.operands[1]), i);
+-        		// If saved and > 127-15, exponent is converted from 8 to 5-bit by subtracting 0x70
+-        		// If saved but not > 127-15, clamp exponent at 0, add 0x400 to mantissa and shift right by (0x71-exponent)
+-        		// If right shift is greater than 31 bits, manually clamp mantissa to 0 or else the output of the shift will be wrong
+-        		println("\t{0}.u16[{1}] = {2}.u8[0] != 0xFF ? ({2}.u8[0] > 0x70 ? ((({2}.u8[0]-0x70)<<10)+{3}.u16) : (0x71-{2}.u8[0] > 31 ? 0x0 : ((0x400+{3}.u16)>>(0x71-{2}.u8[0])))) : 0x7FFF;", v(insn.operands[0]), i+(2*insn.operands[4]), vTemp(), temp());
+-        		// Add back original sign
+-        		println("\t{}.u16[{}] |= (({}.u32[{}]&0x80000000)>>16);", v(insn.operands[0]), i+(2*insn.operands[4]), v(insn.operands[1]), i);
+-            }
++                packHalf(i, i + 2 * insn.operands[4]);
+             break;
+ 
+         default:
+@@ -2306,6 +2344,7 @@ bool Recompiler::Recompile(
+             break;
+         }
+         break;
++    }
+ 
+     case PPC_INST_VPKSHUS:
+     case PPC_INST_VPKSHUS128:
+-- 
+2.55.0
+

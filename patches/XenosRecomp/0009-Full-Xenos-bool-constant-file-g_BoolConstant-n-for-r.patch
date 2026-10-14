@@ -1,0 +1,63 @@
+From 968b8fd3464e2bc34ab008b181bbd3edd63b1fce Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Mon, 20 Jul 2026 02:10:48 -0400
+Subject: [PATCH 09/23] Full Xenos bool-constant file: g_BoolConstant(n) for
+ raw global addresses
+
+The single g_Booleans uint models UnleashedRecomp's named 16+16 scheme;
+Fable2's world pixel shaders branch on raw global bool addresses (measured:
+b129 in ps_4ae443cb0711d860, the per-frame world PS) that fell out of the
+recompiler as undeclared identifiers. Unmatched addresses now emit
+g_BoolConstant(n), which reads the whole 256-bit bool file from
+SharedConstants+512 (8 uints, guest registers 0x4900..0x4907). The D3D path
+stubs it to 0.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ XenosRecomp/shader_common.h       | 9 +++++++++
+ XenosRecomp/shader_recompiler.cpp | 2 +-
+ 2 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index de66f59..ad27868 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -53,6 +53,12 @@ struct PushConstants
+                                         int((g_LoopConstantRaw(n) >> 8) & 0xFF), \
+                                         int((g_LoopConstantRaw(n) >> 16) & 0xFF), 0)
+ 
++// Fable2: the full Xenos bool-constant file (256 bits, guest registers
++// 0x4900..0x4907) at 512..543. The single g_Booleans uint above only models the
++// 16+16 named-constant scheme; Fable2's shaders read raw global bool addresses
++// (e.g. b129 = dword 4 bit 1) that need the whole file.
++#define g_BoolConstant(n)          ((vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 512 + 4 * ((n) >> 5)) >> ((n) & 31)) & 1)
++
+ [[vk::constant_id(0)]] const uint g_SpecConstants = 0;
+ 
+ #define g_SpecConstants() g_SpecConstants
+@@ -75,6 +81,9 @@ struct PushConstants
+ 
+ uint g_SpecConstants();
+ 
++// D3D path carries only the named 16+16 bool scheme; raw-address reads see 0.
++#define g_BoolConstant(n) 0
++
+ #endif
+ 
+ Texture2D<float4> g_Texture2DDescriptorHeap[] : register(t0, space0);
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index f829ab6..8985354 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -1803,7 +1803,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                         if (findResult != boolConstants.end())
+                             println("if ((g_Booleans & {}) {}= 0)", findResult->second, cfInstr.condJmp.condition ^ simpleControlFlow ? "!" : "=");
+                         else
+-                            println("if (b{} {}= 0)", uint32_t(cfInstr.condJmp.boolAddress), cfInstr.condJmp.condition ^ simpleControlFlow ? "!" : "=");
++                            println("if (g_BoolConstant({}) {}= 0)", uint32_t(cfInstr.condJmp.boolAddress), cfInstr.condJmp.condition ^ simpleControlFlow ? "!" : "=");
+                     }
+ 
+                     if (simpleControlFlow)
+-- 
+2.55.0
+

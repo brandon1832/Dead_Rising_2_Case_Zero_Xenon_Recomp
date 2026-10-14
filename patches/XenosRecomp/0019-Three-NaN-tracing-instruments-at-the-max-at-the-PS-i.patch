@@ -1,0 +1,186 @@
+From adc79c9ba9a526f6c66857d0998ba16f25b7c36c Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Tue, 11 Aug 2026 22:28:54 -0400
+Subject: [PATCH 19/23] Three NaN-tracing instruments: at the max, at the PS
+ inputs, at the vertex data
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+XE_FLOOR_IS_NAN repoints the xe_max hook's predicate at isnan(operand) — the
+one place a NaN is still visible before Case Zero's shared tone epilogue
+launders it into exactly sqrt(K1*K2) (max(NaN,K1) returns K1, saturate(NaN)
+returns 0), which is why isnan(oC0) at the end of the shader reads false for
+precisely the pixels it was built to find. XE_NAN_IN_PAINT samples the
+interpolator-fed GPRs once at pixel-shader entry, separating an ARRIVING NaN
+(the vertex shader's, or the vertex data's) from a manufactured one.
+XE_NAN_VS_KILL_IN hands the rasterizer a NaN position for any vertex whose
+declared float inputs arrive NaN, so data-borne NaN geometry disappears
+instead of shading. Each carries a _FORCE positive control; all three emit
+always and compile only under their defines, so the default cache rebuilds
+byte for byte (416 of 416 checked).
+
+On Case Zero's outdoor route the chain measured: every pixel of the white
+rgb(180,180,180) plateau is NaN-fed (1,187 magenta, 0 green, 0 remaining at
+180 against a 1,092-pixel baseline), the floor-predicate control paints the
+same population green, the arriving-NaN footprint is 17x the plateau
+(20,563 px), and killing NaN vertex data removes all of it.
+---
+ XenosRecomp/shader_common.h       | 22 +++++++++++++
+ XenosRecomp/shader_recompiler.cpp | 54 +++++++++++++++++++++++++++++++
+ XenosRecomp/shader_recompiler.h   |  4 +++
+ 3 files changed, 80 insertions(+)
+
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index 7800543..c1dc418 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -447,8 +447,30 @@ float computeMipLevel(float2 pixelCoord)
+ // a line there produced `saturate(\n xe_floor = ...; \n max(...))`. An overload set is the
+ // portable way to have a side effect inside an expression in HLSL.
+ #ifdef XE_FLOOR_PAINT
++#ifdef XE_FLOOR_IS_NAN
++// XE_FLOOR_IS_NAN — the same hook asking a DIFFERENT question: did a NaN ARRIVE at any
++// differing-operand max? This is upstream of the laundering that makes NaN invisible to
++// every downstream detector: on the host GPU `max(NaN, K1)` returns K1 and
++// `saturate(K1 - NaN)` returns 0, so Case Zero's shared tone epilogue converts a NaN
++// colour into exactly `sqrt(K1*K2)` = 0.70711 = rgb(180) — a finite value `isnan(oC0)`
++// at the end of the shader can never see, and one that is invariant under scaling ANY
++// upstream constant, which is precisely the part-31 plateau signature (four whole-frame
++// arms "unmoved"). Xenos hardware would not produce the NaN in the first place: its ALU
++// defines 0*anything = 0 where IEEE gives 0*inf = NaN.
++// XE_FLOOR_IS_NAN_FORCE=1 is the positive control and it is not optional (gotcha 30):
++// it sets the flag unconditionally, so every value-band pixel must paint magenta or the
++// instrument was never in the frame.
++#ifndef XE_FLOOR_IS_NAN_FORCE
++#define XE_FLOOR_IS_NAN_FORCE 0
++#endif
++float  xe_max(float  a, float  b, inout bool f) { f = f || XE_FLOOR_IS_NAN_FORCE || isnan(a) || isnan(b);           return max(a, b); }
++float2 xe_max(float2 a, float2 b, inout bool f) { f = f || XE_FLOOR_IS_NAN_FORCE || any(isnan(a)) || any(isnan(b)); return max(a, b); }
++float3 xe_max(float3 a, float3 b, inout bool f) { f = f || XE_FLOOR_IS_NAN_FORCE || any(isnan(a)) || any(isnan(b)); return max(a, b); }
++float4 xe_max(float4 a, float4 b, inout bool f) { f = f || XE_FLOOR_IS_NAN_FORCE || any(isnan(a)) || any(isnan(b)); return max(a, b); }
++#else
+ float  xe_max(float  a, float  b, inout bool f) { f = f || (b > a);      return max(a, b); }
+ float2 xe_max(float2 a, float2 b, inout bool f) { f = f || any(b > a);   return max(a, b); }
+ float3 xe_max(float3 a, float3 b, inout bool f) { f = f || any(b > a);   return max(a, b); }
+ float4 xe_max(float4 a, float4 b, inout bool f) { f = f || any(b > a);   return max(a, b); }
+ #endif
++#endif
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 6ba05cd..d0d1dbe 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -1748,6 +1748,13 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+                 println("in {0} i{1}{2} : {3}{2},", usageType, USAGE_VARIABLES[uint32_t(vertexElement.usage)],
+                     uint32_t(vertexElement.usageIndex), USAGE_SEMANTICS[uint32_t(vertexElement.usage)]);
++
++                // uint4-typed usages (BLENDINDICES, NORMAL, ...) carry raw bits and
++                // cannot hold a float NaN; isnan() on them would not compile anyway.
++                if (strncmp(usageType, "float", 5) == 0)
++                    vsFloatInputNames.push_back(fmt::format("i{}{}",
++                        USAGE_VARIABLES[uint32_t(vertexElement.usage)],
++                        uint32_t(vertexElement.usageIndex)));
+             }
+ 
+             vertexElements.emplace(uint32_t(vertexElement.address), vertexElement);
+@@ -1867,6 +1874,13 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+     uint32_t interpolatorCount = (shader->interpolatorInfo >> 5) & 0x1F;
+ 
++    // XE_NAN_IN_PAINT — the regs the scan converter fills from interpolants, collected so
++    // the instrument below can ask "did a NaN ARRIVE at this pixel shader" as distinct
++    // from "did this pixel shader manufacture one". The two have different owners: an
++    // arriving NaN is the vertex shader's (or the vertex data's), a manufactured one is
++    // this shader's own arithmetic.
++    std::vector<uint32_t> interpolatorRegs;
++
+     for (uint32_t i = 0; i < interpolatorCount; i++)
+     {
+         union
+@@ -1887,6 +1901,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                     uint32_t(interpolator.reg), uint32_t(interpolator.reg),
+                     USAGE_VARIABLES[uint32_t(interpolator.usage)], uint32_t(interpolator.usageIndex));
+             printedRegisters[interpolator.reg] = true;
++            interpolatorRegs.push_back(uint32_t(interpolator.reg));
+         }
+         else
+         {
+@@ -1916,6 +1931,21 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     // 25 vertex shaders on an undeclared identifier.
+     out += "#ifdef XE_FLOOR_PAINT\n\tbool xe_floor = false;\n#endif\n";
+ 
++    // XE_NAN_IN_PAINT — did a NaN arrive IN AN INTERPOLANT? Sampled once, at entry,
++    // before any of this shader's own arithmetic can either create or launder one.
++    // Its own flag rather than xe_floor: with only this define set, xe_max keeps its
++    // (b > a) predicate, which fires constantly and would drown the answer.
++    // XE_NAN_IN_PAINT_FORCE=1 is the positive control (gotcha 30).
++    if (isPixelShader)
++    {
++        out += "#ifdef XE_NAN_IN_PAINT\n";
++        out += "#ifndef XE_NAN_IN_PAINT_FORCE\n#define XE_NAN_IN_PAINT_FORCE 0\n#endif\n";
++        out += "\tbool xe_nanin = XE_NAN_IN_PAINT_FORCE";
++        for (uint32_t reg : interpolatorRegs)
++            print(" || any(isnan(r{}))", reg);
++        out += ";\n#endif\n";
++    }
++
+     for (size_t i = 0; i < 64; i++)
+     {
+         if (!printedRegisters[i])
+@@ -2345,6 +2375,15 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                     out += "\t\toC0 = float4(1.0, 0.0, 1.0, 1.0);\n";
+                     out += "#endif\n";
+ 
++                    // XE_NAN_IN_PAINT — see the declaration beside the interpolator
++                    // init. Painted unconditionally (no value-band gate): the point is
++                    // the FOOTPRINT of arriving NaNs, including any pixel where one
++                    // arrives and does not end at the plateau value.
++                    out += "#ifdef XE_NAN_IN_PAINT\n";
++                    out += "\tif (xe_nanin)\n";
++                    out += "\t\toC0 = float4(1.0, 0.0, 1.0, 1.0);\n";
++                    out += "#endif\n";
++
+                     specConstantsMask |= SPEC_CONSTANT_ALPHA_TEST;
+ 
+                     indent();
+@@ -2384,6 +2423,21 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                         out += "\toPos.xy = oPos.xy * g_PosScale + g_PosOffset * oPos.w;\n";
+                         out += "\toPos.xy += g_HalfPixelOffset * oPos.w;\n";
+                     }
++
++                    // XE_NAN_VS_KILL_IN — cull any triangle touching a vertex whose
++                    // DECLARED float inputs arrived NaN, by handing the rasterizer a NaN
++                    // position. Run beside XE_NAN_IN_PAINT: magenta that VANISHES under
++                    // this arm entered in the vertex data; magenta that survives was
++                    // manufactured by VS arithmetic (or a dependent fetch, which this
++                    // does not see). XE_NAN_VS_KILL_IN_FORCE=1 kills every vertex — the
++                    // positive control, an almost-empty world or the arm never compiled.
++                    out += "#ifdef XE_NAN_VS_KILL_IN\n";
++                    out += "#ifndef XE_NAN_VS_KILL_IN_FORCE\n#define XE_NAN_VS_KILL_IN_FORCE 0\n#endif\n";
++                    out += "\tif (XE_NAN_VS_KILL_IN_FORCE";
++                    for (const std::string& name : vsFloatInputNames)
++                        print(" || any(isnan({}))", name);
++                    out += ")\n\t\toPos = asfloat(0x7FC00000u).xxxx;\n";
++                    out += "#endif\n";
+                 }
+ 
+                 if (simpleControlFlow)
+diff --git a/XenosRecomp/shader_recompiler.h b/XenosRecomp/shader_recompiler.h
+index e88fb7a..55caad0 100644
+--- a/XenosRecomp/shader_recompiler.h
++++ b/XenosRecomp/shader_recompiler.h
+@@ -28,6 +28,10 @@ struct ShaderRecompiler : StringBuffer
+     const uint8_t* constantTableData = nullptr;
+     std::unordered_map<uint32_t, VertexElement> vertexElements;
+     std::unordered_map<uint32_t, std::string> interpolators;
++    // XE_NAN_VS_KILL_IN: the float-typed declared vertex inputs, so the vertex-shader
++    // epilogue can ask "did this vertex's DATA arrive NaN" — the discriminator between
++    // a NaN minted by our vertex decode and one manufactured by VS arithmetic.
++    std::vector<std::string> vsFloatInputNames;
+     std::unordered_map<uint32_t, const ConstantInfo*> float4Constants;
+     std::unordered_map<uint32_t, const char*> boolConstants;
+     std::unordered_map<uint32_t, const char*> samplers;
+-- 
+2.55.0
+

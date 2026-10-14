@@ -1,0 +1,42 @@
+From 5e7d3348447abe9900d3d6c59649b92d944fc594 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Mon, 3 Aug 2026 16:10:49 -0400
+Subject: [PATCH 07/14] ppc_context: guard PPC_FUNC_PROLOGUE with #ifndef
+
+Every emitted function body opens with PPC_FUNC_PROLOGUE(), which makes it the
+one place a port can attach whole-image, per-function instrumentation. The weak
+alias seam only covers functions you thought to hook, and a PPC_CALL_INDIRECT_FUNC
+hook cannot see direct or tail calls, so neither can answer 'which guest functions
+did this run execute, and in what order'. That question turns a Xenia
+--trace_function_data capture into a control-flow divergence oracle.
+
+Guarded the same way PPC_LOAD_*/PPC_CALL_INDIRECT_FUNC already are, so a
+force-included header can define its own and paste the __builtin_assume back in.
+No behaviour change when nothing overrides it.
+---
+ XenonUtils/ppc_context.h | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/XenonUtils/ppc_context.h b/XenonUtils/ppc_context.h
+index c0841fe..777e9ff 100644
+--- a/XenonUtils/ppc_context.h
++++ b/XenonUtils/ppc_context.h
+@@ -29,7 +29,15 @@
+ #define PPC_EXTERN_FUNC(x) extern PPC_FUNC(x)
+ #define PPC_WEAK_FUNC(x) __attribute__((weak,noinline)) PPC_FUNC(x)
+ 
++// Guarded like PPC_LOAD_*/PPC_CALL_INDIRECT_FUNC below, so a port can force-include a
++// header that defines its own prologue and still get this one's __builtin_assume by
++// pasting it in. Every emitted function body opens with this macro, which makes it the
++// only place a port can attach whole-image, per-function instrumentation that cannot be
++// bypassed: the weak-alias seam covers only functions you thought to hook, and an
++// indirect-call hook cannot see a direct or tail call.
++#ifndef PPC_FUNC_PROLOGUE
+ #define PPC_FUNC_PROLOGUE() __builtin_assume(((size_t)base & 0x1F) == 0)
++#endif
+ 
+ #ifndef PPC_LOAD_U8
+ #define PPC_LOAD_U8(x) *(volatile uint8_t*)(base + (x))
+-- 
+2.55.0
+

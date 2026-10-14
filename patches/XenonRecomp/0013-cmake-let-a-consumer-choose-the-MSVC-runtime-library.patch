@@ -1,0 +1,38 @@
+From 8f29a2cbcbf26c75edf7d5ecf341014f36e70861 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Fri, 28 Aug 2026 14:46:22 -0400
+Subject: [PATCH 13/14] cmake: let a consumer choose the MSVC runtime library
+
+Forcing MultiThreaded (/MT) means any project that links XenonUtils and also links
+DLLs - SDL2, ffmpeg - fails with "mismatch detected for RuntimeLibrary", an error
+that names neither project and no file. Guarding the set() leaves the default
+untouched when nobody asks.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ CMakeLists.txt | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b89407f..16f8f33 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -11,7 +11,14 @@ if (POLICY CMP0141)
+   set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
+ endif()
+ 
+-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
++# Respect an explicit choice rather than forcing one. A consumer that links this as a
++# library has to match its CRT, and one that also links DLLs (SDL2, ffmpeg) needs the
++# DLL runtime -- forcing /MT here makes that link fail with
++# "lld-link: error: /failifmismatch: mismatch detected for 'RuntimeLibrary'", which
++# names neither project. The default is unchanged when nobody asks.
++if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
++    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
++endif()
+ 
+ add_subdirectory(${THIRDPARTY_ROOT})
+ set(XENONANALYSE_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/XenonAnalyse)
+-- 
+2.55.0
+

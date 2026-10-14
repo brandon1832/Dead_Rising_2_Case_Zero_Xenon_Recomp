@@ -1,5 +1,9 @@
 # Open items, in order
 
+> **FINAL (2026-10-14): the project ended at v1.1.3.** Nothing below will be worked on by
+> this maintainer. `docs/final-state.md` §3 is the short list of what is still open and
+> points back into this file; the rest of this file is the record.
+
 **Split out of `CLAUDE.md` on 2026-08-08.** The actionable backlog. Items struck through
 are closed or retracted and are kept because a retraction is worth as much as a finding
 — several of these were "fixed" by something else entirely, and the record of what was

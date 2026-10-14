@@ -1,0 +1,56 @@
+From d80ba8d592b75c5137ff43bd10c8e25d1cfde5d3 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Mon, 20 Jul 2026 01:41:21 -0400
+Subject: [PATCH 08/23] No-vfetch vertex shaders: seed r0.x with SV_VertexID
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A VS with zero vertex elements gets its geometry from the auto-loaded
+vertex index (Xenos seeds r0.x at thread start) — Fable2's whole
+post/composite chain draws fullscreen quads this way. r0 = 0.0 made every
+such vertex identical: degenerate triangles, nothing rasterized, and with
+the runtime now willing to draw them (FABLE2_DRAW_POINTS) the world's
+final tonemap/composite still produced nothing. Matches the existing
+UNLEASHED_RECOMP hasIndexCount path but keyed on the shader itself.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ XenosRecomp/shader_recompiler.cpp | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 6e90645..f829ab6 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -1417,6 +1417,13 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+             out += "\tin uint iInstanceId : SV_InstanceID,\n";
+         }
+     #endif
++        // A vertex shader with NO vertex elements gets its geometry from the
++        // auto-loaded vertex index (Xenos seeds r0.x with it at thread start) —
++        // Fable2's whole post/composite chain draws fullscreen quads this way.
++        // Without this every no-vfetch vertex is identical: degenerate
++        // triangles, nothing rasterized.
++        if (vertexShader->vertexElementCount == 0)
++            out += "\tin uint iVertexId : SV_VertexID,\n";
+ 
+         out += "\tout float4 oPos : SV_Position";
+ 
+@@ -1561,6 +1568,13 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                 out += "float4(iVertexId + g_IndexCount.x * iInstanceId, 0.0, 0.0, 0.0);\n";
+             }
+         #endif
++            else if (!isPixelShader && i == 0 &&
++                     reinterpret_cast<const VertexShader*>(shader)->vertexElementCount == 0)
++            {
++                // No-vfetch VS: r0.x = the auto-loaded vertex index (see the
++                // SV_VertexID input above).
++                out += "float4(iVertexId, 0.0, 0.0, 0.0);\n";
++            }
+             else
+             {
+                 out += "0.0;\n";
+-- 
+2.55.0
+

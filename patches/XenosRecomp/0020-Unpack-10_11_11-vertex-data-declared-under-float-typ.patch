@@ -1,0 +1,118 @@
+From 4621beb43b3152c12d44cd62a15daf2995502cdb Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Tue, 11 Aug 2026 22:44:34 -0400
+Subject: [PATCH 20/23] Unpack 10_11_11 vertex data declared under float-typed
+ usages
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A fmt16 (k_10_11_11) vertex element riding a float usage — Dead Rising 2 wraps
+every packed normal as TEXCOORD, where Fable 2 wraps them as NORMAL — reached
+the shader as a float4 input while the runtime bound the attribute R32_UINT.
+That is a pipeline type mismatch (VUID-VkGraphicsPipelineCreateInfo-Input-08733)
+whose practical effect was the packed dword's bits delivered AS a float: NaN
+whenever bits 30..23 are all ones, huge garbage otherwise, per vertex. The NaN
+was then laundered by the shared tone epilogue into exactly rgb(180,180,180) —
+Case Zero's white-surface plateau — and the non-NaN garbage was wrong lighting
+on every fmt16 mesh since phase 5.
+
+The fix keeps the input float4 and the bits intact across the fetch (the
+runtime now binds R32_SFLOAT, a plain 32-bit load) and unpacks in-shader by
+the fetch instruction's own static format field: XeUnpack_10_11_11(asuint(x)),
+the same decode XeVfetchDep's case 16 already used. The uint4 usages keep the
+existing tfetchR11G11B10 spec-constant path untouched. 35 of Case Zero's 416
+modules change; on the outdoor route the plateau goes 1,092 px -> 0, scene
+mean luma 35.5 -> 44.7, distinct colours 80k -> 112k.
+---
+ XenosRecomp/shader_common.h       | 21 +++++++++++++++++++++
+ XenosRecomp/shader_recompiler.cpp | 24 ++++++++++++++++++++++--
+ 2 files changed, 43 insertions(+), 2 deletions(-)
+
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index c1dc418..fb70eee 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -379,6 +379,27 @@ float4 tfetchCube(uint resourceDescriptorIndex, uint samplerDescriptorIndex, flo
+     return XENOS_SAMPLE(g_TextureCubeDescriptorHeap[resourceDescriptorIndex], g_SamplerDescriptorHeap[samplerDescriptorIndex], cubeMapData.cubeMapDirections[texCoord.z]);
+ }
+ 
++// The 10_11_11 unpack for a DECLARED vertex input that rides a float-typed usage.
++// Dead Rising 2 wraps its packed normals as TEXCOORD (Fable 2 wraps them as NORMAL,
++// which the uint4 path + tfetchR11G11B10 below already covers), so the input variable is
++// float4 and the pipeline must bind the attribute R32_SFLOAT for the types to match —
++// binding R32_UINT against a float input is VUID-VkGraphicsPipelineCreateInfo-Input-08733,
++// and what the driver actually delivered was the packed dword's BITS as a float: any
++// normal whose dword has bits 30..23 all ones read as NaN, which Case Zero's shared tone
++// epilogue launders into exactly rgb(180,180,180) — the white-surface plateau. The float
++// carries raw bits only across the fetch (a plain 32-bit load; no arithmetic touches it
++// before the asuint), decoded here exactly as XeVfetchDep's case 16 does: x = bits 0..10,
++// y = 11..21, z = 22..31, sign bit at the top of each field. No spec constant: the fetch
++// instruction's own format field says the data is packed, statically, per shader.
++float4 XeUnpack_10_11_11(float rawBitsAsFloat)
++{
++    uint raw = asuint(rawBitsAsFloat);
++    return float4((raw & 0x00000400 ? -1.0 : 0.0) + ((raw & 0x3FF) / 1024.0),
++                  (raw & 0x00200000 ? -1.0 : 0.0) + (((raw >> 11) & 0x3FF) / 1024.0),
++                  (raw & 0x80000000 ? -1.0 : 0.0) + (((raw >> 22) & 0x1FF) / 512.0),
++                  0.0);
++}
++
+ float4 tfetchR11G11B10(uint4 value)
+ {
+     if (g_SpecConstants() & SPEC_CONSTANT_R11G11B10_NORMAL)
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index d0d1dbe..6a989b2 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -413,6 +413,21 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
+         return;
+     }
+ 
++    // A 10_11_11 (format 16) fetch through a float-typed usage carries the packed dword
++    // as raw bits in the input's .x — the runtime binds it R32_SFLOAT so the pipeline
++    // types match — and is unpacked here, by the fetch instruction's own format field.
++    // Dead Rising 2: Case Zero wraps every packed normal as TEXCOORD; the uint4 usages
++    // (Normal/Tangent/Binormal) keep their existing spec-constant path below. Reading it
++    // as a texcoord instead delivered bits-as-float: NaN for any dword with bits 30..23
++    // set, which is what painted the title's white-surface plateau (see XeUnpack_10_11_11
++    // in shader_common.h).
++    const bool packed10_11_11 =
++        instr.format == 16 && findResult->second.usage != DeclUsage::Normal &&
++        findResult->second.usage != DeclUsage::Tangent &&
++        findResult->second.usage != DeclUsage::Binormal;
++    if (packed10_11_11)
++        print("XeUnpack_10_11_11(");
++
+     switch (findResult->second.usage)
+     {
+     case DeclUsage::Normal:
+@@ -423,7 +438,8 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
+         break;
+ 
+     case DeclUsage::TexCoord:
+-        print("tfetchTexcoord(g_SwappedTexcoords, ");
++        if (!packed10_11_11)
++            print("tfetchTexcoord(g_SwappedTexcoords, ");
+         break;
+     }
+ 
+@@ -438,10 +454,14 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
+         break;
+ 
+     case DeclUsage::TexCoord:
+-        print(", {})", uint32_t(findResult->second.usageIndex));
++        if (!packed10_11_11)
++            print(", {})", uint32_t(findResult->second.usageIndex));
+         break;
+     }
+ 
++    if (packed10_11_11)
++        out += ".x)";
++
+     out += '.';
+     printDstSwizzle(instr.dstSwizzle, true);
+ 
+-- 
+2.55.0
+

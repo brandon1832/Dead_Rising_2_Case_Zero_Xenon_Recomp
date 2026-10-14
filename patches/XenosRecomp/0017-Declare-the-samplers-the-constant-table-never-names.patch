@@ -1,0 +1,293 @@
+From 53106a4ea9c83c183e3bef7e3003cbf101fdd6b4 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Fri, 7 Aug 2026 01:19:51 -0400
+Subject: [PATCH 17/23] Declare the samplers the constant table never names
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A Xenos texture fetch names its fetch-constant slot in the instruction. The
+constant table is the compiler's SYMBOL table, and a sampler symbol can be
+absent from it while the fetch that uses the slot is still there — measured in
+Fable2's shader bank on ps_2dc3ed68cc2fe93e (PSHADER_POSTPROCESSING_QUAD),
+whose only texture use is a getWeights2D and whose constant table declares no
+sampler at all.
+
+recompile(TextureFetchInstruction) already handled the lookup miss by
+synthesizing the name "s<slot>", but nothing ever declared
+s<slot>_Texture2DDescriptorIndex / s<slot>_SamplerDescriptorIndex, so DXC
+rejected the shader outright with "use of undeclared identifier". That was the
+last translation failure in the 576-blob bank.
+
+Naming was the only thing missing. Both descriptor indices are pure functions of
+the fetch-constant register index — SharedConstants+{0,64,128,288} for the four
+texture dimensions and +192 for the sampler — so a synthesized name at the same
+index reads exactly the slot the runtime published for that fetch constant.
+
+collectUndeclaredSamplers() walks the microcode before any output is emitted
+(declarations must precede use), collecting every slot a non-VertexFetch fetch
+addresses — the same rule the main walk uses to decide an instruction is a
+texture fetch. The constant-table loop then strikes off the slots the table does
+name, and whatever is left is declared alongside them in both the SPIR-V
+(#define + RawBufferLoad) and the D3D (cbuffer packoffset) paths.
+
+Regression control: retranslating the whole bank gives 576/576 with zero
+failures, and the other 575 .spv files are BYTE-IDENTICAL to the pre-fix output.
+Strictly additive.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ XenosRecomp/shader_recompiler.cpp | 184 ++++++++++++++++++++++++++++++
+ XenosRecomp/shader_recompiler.h   |   7 ++
+ 2 files changed, 191 insertions(+)
+
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 1d131ed..830956e 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -185,6 +185,161 @@ void ShaderRecompiler::printDstSwizzle01(uint32_t dstRegister, uint32_t dstSwizz
+     }
+ }
+ 
++// Find the texture fetch slots the microcode uses but the constant table never
++// names.
++//
++// The constant table is the compiler's SYMBOL table, not a hardware binding
++// table: a sampler symbol that survived only in a getWeights (filter-weight)
++// fetch can be absent from it entirely, while the fetch instruction still names
++// its fetch-constant slot. recompile(TextureFetchInstruction) already falls back
++// to a synthesized "s<slot>" name in that case, but nothing declared
++// s<slot>_Texture2DDescriptorIndex / s<slot>_SamplerDescriptorIndex, so DXC
++// rejected the shader outright (Fable2 bank: ps_2dc3ed68cc2fe93e, the one
++// remaining bank translation failure).
++//
++// Naming is the only thing missing. Both descriptor-index declarations are pure
++// functions of the fetch-constant register index — SharedConstants+{0,64,128,288}
++// for the four texture dimensions and +192 for the sampler, all indexed by slot
++// — so a synthesized name at the same index reads exactly the slot the runtime
++// published for that fetch constant.
++//
++// Runs before any output is emitted, because the declarations must precede use.
++void ShaderRecompiler::collectUndeclaredSamplers(const uint8_t* shaderData)
++{
++    const auto shaderContainer = reinterpret_cast<const ShaderContainer*>(shaderData);
++    const auto shader = reinterpret_cast<const Shader*>(shaderData + shaderContainer->shaderOffset);
++    const be<uint32_t>* code = reinterpret_cast<const be<uint32_t>*>(shaderData + shaderContainer->virtualSize + shader->physicalOffset);
++
++    ControlFlowInstruction controlFlow[2];
++    uint32_t codes[4];
++    uint32_t& code0 = codes[0];
++    uint32_t& code1 = codes[1];
++    uint32_t& code2 = codes[2];
++    uint32_t& code3 = codes[3];
++
++    // Pass 1: the CF blocks live in front of the ALU/fetch stream, so the first
++    // exec target bounds the CF stream. Same derivation as the main walk.
++    auto controlFlowCode = code;
++    uint32_t instrAddress = 0;
++    uint32_t instrSize = shader->size;
++
++    while (instrAddress < instrSize)
++    {
++        code0 = controlFlowCode[0];
++        code1 = controlFlowCode[1] & 0xFFFF;
++        code2 = (controlFlowCode[1] >> 16) | (controlFlowCode[2] << 16);
++        code3 = controlFlowCode[2] >> 16;
++        memcpy(controlFlow, codes, sizeof(controlFlow));
++
++        for (auto& cfInstr : controlFlow)
++        {
++            uint32_t address = 0;
++
++            switch (cfInstr.opcode)
++            {
++            case ControlFlowOpcode::Exec:
++            case ControlFlowOpcode::ExecEnd:
++                address = cfInstr.exec.address;
++                break;
++
++            case ControlFlowOpcode::CondExec:
++            case ControlFlowOpcode::CondExecEnd:
++            case ControlFlowOpcode::CondExecPredClean:
++            case ControlFlowOpcode::CondExecPredCleanEnd:
++                address = cfInstr.condExec.address;
++                break;
++
++            case ControlFlowOpcode::CondExecPred:
++            case ControlFlowOpcode::CondExecPredEnd:
++                address = cfInstr.condExecPred.address;
++                break;
++            }
++
++            if (address != 0)
++                instrSize = std::min<uint32_t>(instrSize, address * 12);
++        }
++
++        controlFlowCode += 3;
++        instrAddress += 12;
++    }
++
++    // Pass 2: every exec block's fetch instructions. A serialized instruction is
++    // a fetch when its sequence bit is set, and a texture fetch when its opcode
++    // is not VertexFetch.
++    controlFlowCode = code;
++    instrAddress = 0;
++
++    while (instrAddress < instrSize)
++    {
++        code0 = controlFlowCode[0];
++        code1 = controlFlowCode[1] & 0xFFFF;
++        code2 = (controlFlowCode[1] >> 16) | (controlFlowCode[2] << 16);
++        code3 = controlFlowCode[2] >> 16;
++        memcpy(controlFlow, codes, sizeof(controlFlow));
++
++        for (auto& cfInstr : controlFlow)
++        {
++            uint32_t address = 0;
++            uint32_t count = 0;
++            uint32_t sequence = 0;
++
++            switch (cfInstr.opcode)
++            {
++            case ControlFlowOpcode::Exec:
++            case ControlFlowOpcode::ExecEnd:
++                address = cfInstr.exec.address;
++                count = cfInstr.exec.count;
++                sequence = cfInstr.exec.sequence;
++                break;
++
++            case ControlFlowOpcode::CondExec:
++            case ControlFlowOpcode::CondExecEnd:
++            case ControlFlowOpcode::CondExecPredClean:
++            case ControlFlowOpcode::CondExecPredCleanEnd:
++                address = cfInstr.condExec.address;
++                count = cfInstr.condExec.count;
++                sequence = cfInstr.condExec.sequence;
++                break;
++
++            case ControlFlowOpcode::CondExecPred:
++            case ControlFlowOpcode::CondExecPredEnd:
++                address = cfInstr.condExecPred.address;
++                count = cfInstr.condExecPred.count;
++                sequence = cfInstr.condExecPred.sequence;
++                break;
++
++            default:
++                continue;
++            }
++
++            auto instructionCode = code + address * 3;
++
++            for (uint32_t i = 0; i < count; i++, instructionCode += 3)
++            {
++                if ((sequence & (1u << (i * 2))) == 0)
++                    continue;
++
++                union InstrUnion
++                {
++                    VertexFetchInstruction vertexFetch;
++                    TextureFetchInstruction textureFetch;
++                    uint32_t codes[3];
++                } u;
++
++                u.codes[0] = instructionCode[0];
++                u.codes[1] = instructionCode[1];
++                u.codes[2] = instructionCode[2];
++
++                if (u.vertexFetch.opcode != FetchOpcode::VertexFetch)
++                    undeclaredSamplers.emplace(uint32_t(u.textureFetch.constIndex));
++            }
++        }
++
++        controlFlowCode += 3;
++        instrAddress += 12;
++    }
++}
++
+ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t address)
+ {
+     // Effective fetch slot and stride: a mini-fetch inherits both from the
+@@ -1291,6 +1446,10 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     const auto constantTableContainer = reinterpret_cast<const ConstantTableContainer*>(shaderData + shaderContainer->constantTableOffset);
+     constantTableData = reinterpret_cast<const uint8_t*>(&constantTableContainer->constantTable);
+ 
++    // Must run before anything is emitted: the constant-table loops below strike
++    // the slots the table DOES name off this set, then declare what is left.
++    collectUndeclaredSamplers(shaderData);
++
+     out += "#ifdef __spirv__\n\n";
+ 
+ #ifdef UNLEASHED_RECOMP
+@@ -1359,12 +1518,25 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                 constantName, 192 + constantInfo->registerIndex * 4);
+ 
+             samplers.emplace(constantInfo->registerIndex, constantName);
++            undeclaredSamplers.erase(constantInfo->registerIndex);
+             break;
+         }
+ 
+         }
+     }
+ 
++    for (uint32_t slot : undeclaredSamplers)
++    {
++        for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
++        {
++            println("#define s{}_Texture{}DescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})",
++                slot, TEXTURE_DIMENSIONS[j], (j == 3 ? 288 : j * 64) + slot * 4);
++        }
++
++        println("#define s{}_SamplerDescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})",
++            slot, 192 + slot * 4);
++    }
++
+     out += "\n#else\n\n";
+ 
+     println("cbuffer {}ShaderConstants : register(b{}, space4)", isPixelShader ? "Pixel" : "Vertex", isPixelShader ? 1 : 0);
+@@ -1419,6 +1591,18 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         }
+     }
+ 
++    for (uint32_t slot : undeclaredSamplers)
++    {
++        for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
++        {
++            println("\tuint s{}_Texture{}DescriptorIndex : packoffset(c{}.{});",
++                slot, TEXTURE_DIMENSIONS[j], (j == 3 ? 18 : j * 4) + slot / 4, SWIZZLES[slot % 4]);
++        }
++
++        println("\tuint s{}_SamplerDescriptorIndex : packoffset(c{}.{});",
++            slot, 12 + slot / 4, SWIZZLES[slot % 4]);
++    }
++
+     out += "\tDEFINE_SHARED_CONSTANTS();\n";
+     out += "};\n\n";
+ 
+diff --git a/XenosRecomp/shader_recompiler.h b/XenosRecomp/shader_recompiler.h
+index abb79ac..e88fb7a 100644
+--- a/XenosRecomp/shader_recompiler.h
++++ b/XenosRecomp/shader_recompiler.h
+@@ -31,6 +31,11 @@ struct ShaderRecompiler : StringBuffer
+     std::unordered_map<uint32_t, const ConstantInfo*> float4Constants;
+     std::unordered_map<uint32_t, const char*> boolConstants;
+     std::unordered_map<uint32_t, const char*> samplers;
++    // Texture fetch slots the microcode actually uses that the constant table
++    // does NOT name (see collectUndeclaredSamplers). recompile() falls back to
++    // the synthesized name "s<slot>" for those, so their descriptor-index
++    // declarations have to be emitted alongside the named ones.
++    std::set<uint32_t> undeclaredSamplers;
+     std::unordered_map<uint32_t, uint32_t> ifEndLabels;
+     uint32_t specConstantsMask = 0;
+     // Mini-fetch inheritance (Fable2 §3z dependent vertex fetch): a vfetch with
+@@ -54,6 +59,8 @@ struct ShaderRecompiler : StringBuffer
+     void printDstSwizzle(uint32_t dstSwizzle, bool operand);
+     void printDstSwizzle01(uint32_t dstRegister, uint32_t dstSwizzle);
+ 
++    void collectUndeclaredSamplers(const uint8_t* shaderData);
++
+     void recompile(const VertexFetchInstruction& instr, uint32_t address);
+     void recompile(const TextureFetchInstruction& instr, bool bicubic);
+     void recompile(const AluInstruction& instr);
+-- 
+2.55.0
+

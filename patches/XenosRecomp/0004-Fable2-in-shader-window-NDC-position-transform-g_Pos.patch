@@ -1,0 +1,63 @@
+From d3778f2e7fe51db7b727f98603c07aa7ec22dca5 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Thu, 16 Jul 2026 01:45:30 -0400
+Subject: [PATCH 04/23] Fable2: in-shader window->NDC position transform
+ (g_PosScale/g_PosOffset epilogue)
+
+---
+ XenosRecomp/shader_common.h       | 8 +++++++-
+ XenosRecomp/shader_recompiler.cpp | 5 ++++-
+ 2 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index 67f7e3f..7c76745 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -30,6 +30,10 @@ struct PushConstants
+ #define g_SwappedTexcoords         vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 260)
+ #define g_HalfPixelOffset          vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 264)
+ #define g_AlphaThreshold           vk::RawBufferLoad<float>(g_PushConstants.SharedConstants + 272)
++// Fable2: window->NDC position transform (identity when the guest viewport
++// transform is enabled); 1D descriptor indices occupy 288..351.
++#define g_PosScale                 vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 352)
++#define g_PosOffset                vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 360)
+ 
+ [[vk::constant_id(0)]] const uint g_SpecConstants = 0;
+ 
+@@ -41,7 +45,9 @@ struct PushConstants
+     uint g_Booleans : packoffset(c16.x); \
+     uint g_SwappedTexcoords : packoffset(c16.y); \
+     float2 g_HalfPixelOffset : packoffset(c16.z); \
+-    float g_AlphaThreshold : packoffset(c17.x);
++    float g_AlphaThreshold : packoffset(c17.x); \
++    float2 g_PosScale : packoffset(c22.x); \
++    float2 g_PosOffset : packoffset(c22.z);
+ 
+ uint g_SpecConstants();
+ 
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 596a3fe..56e5ba0 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -1823,7 +1823,9 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                     if (!hasMtxProjection)
+                 #endif
+                     {
+-                        out += "\toPos.xy += g_HalfPixelOffset * oPos.w;\n";
++                        out += "\toPos.xy = oPos.xy * g_PosScale + g_PosOffset * oPos.w;\n";
++                        out += "\toPos.xy = oPos.xy * g_PosScale + g_PosOffset * oPos.w;\n";
++        out += "\toPos.xy += g_HalfPixelOffset * oPos.w;\n";
+                     }
+                 }
+ 
+@@ -1872,6 +1874,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         out += "\t}\n";
+ 
+     if (!isPixelShader && hasMtxProjection)
++        out += "\toPos.xy = oPos.xy * g_PosScale + g_PosOffset * oPos.w;\n";
+         out += "\toPos.xy += g_HalfPixelOffset * oPos.w;\n";
+ #endif
+ 
+-- 
+2.55.0
+

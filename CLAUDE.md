@@ -1,5 +1,16 @@
 # Dead Rising 2: Case Zero Xenon Recomp — project guide
 
+> **THE PROJECT ENDED AT v1.1.3 (2026-10-14).** The maintainer's words: *"I won't work on
+> this project anymore so 1.1.3 is the official last update from me."* **Read
+> `docs/final-state.md` first** — it is the hand-off: what shipped (five downloads, tag
+> `v1.1.3` = `51df8c7`, each built from which commit), what is open and where each
+> record lives, and what a successor needs to build (the recompiler patches now in
+> `patches/`, and the PRIVATE XenonLive dependency, which the build requires). Everything
+> below is the development journal as it stood, including "live" pointers and owed
+> items that will now never be picked up by this maintainer. The machines it names
+> (`czwin`, `czmac`, `czamd`) were personal hardware, and "operator" means the
+> maintainer playing the game. Case West will not be done here.
+
 Static recompilation of the Xbox 360 XBLA title **Dead Rising 2: Case Zero**
 (Capcom / Blue Castle Games, 2010) using **XenonRecomp** + **XenosRecomp** (hedge-dev's
 faithful recompiler pair, the ones UnleashedRecomp uses).
@@ -190,6 +201,9 @@ mask; trust the microcode's own swizzles.
     successor. `d3d-phase-c28-kickoff.md` records how the white-surface chain
     was built, but **two of its eight steps are retired and its item 0 is answered** —
     read `phase5-notes.md` §6ba before following anything in it.
+  - **FINAL (2026-10-14): THE PROJECT ENDED AT v1.1.3 AND `docs/final-state.md` IS THE
+    LAST HAND-OFF, superseding every `partNN-kickoff.md` below.** What follows was the
+    rule while the project was live.
   - **THE LIVE HAND-OFF IS ALWAYS THE HIGHEST-NUMBERED `partNN-kickoff.md`**, and it
     supersedes every earlier kickoff on "where the port is". **2026-10-10 (night): PERFORMANCE PART 122 — `docs/perf-plan-part122.md` IS THE RECORD AND ITS §7 THE NEXT WORK.** At the 2.0 WORLD/ZOMBIE DETAIL defaults the crowd is ~10,900 draws and the renderer thread `cz-draw` is the frame's bound (11.6 ms vs Main 8.4, GPU 3.8). Fixed: the shadow bias read write-combined memory (`3e6897b`, −0.6 ms on cz-draw, gotcha 641). The texture memo + scoped shared-block zero are ON BY DEFAULT (`1b14044`, −1.09 ms on cz-draw; verified 0 of 267M with the poison control firing; `CZ_VK_NO_TEXMEMO=1` / `CZ_VK_FULL_SHARED_ZERO=1` the controls and the first bisection for a wrong texture / wrong vertices); its 10-min soak gate and a part47 run with the controls are owed. **§7 is written as a TO-DO for whoever does performance next and is mirrored as GitHub issue #2 — keep the two in step.** Nulls: FlatCache prefetch, pump timer slack (the 50 us slack fact is gotcha 642). The 2.0 detail defaults cost ~2-3 ms/frame vs 1.0. **Read campaigns with `tools/part122_fit.py`, not band medians.** **2026-10-10 (evening): SHADOW BIAS, OPEN ITEM 0zl, FIXED AND OPERATOR-VERIFIED (`b6bf4fe`, pushed `f576b0e`, czwin not built):** awning shadows on their own wall appeared only up close; it is the title's per-cascade depth bias c47.xyz (named by DR2 PC's shader, same registers on 360). Settings row 12, default 0.25, 1.00 = OG, `CZ_SHADOW_BIAS=0` the control; gotcha 640. The same session closed the fat-zombie vest LOD report as the title's own (0zh note). **2026-10-10: macOS RUNS AND IS PLAYABLE on the operator's M1 MacBook Air (`ssh czmac`; the `macos-port` work is MERGED INTO master and PUSHED, `1dfc48d`; the XenonRecomp arm64 commit is still local only). `docs/macos-build-setup.md` is the runbook and record; `open-items.md` 0zk is what is open (a freeze when left alone, ~40 fps). Two fixes there change EVERY platform: the bindless heap reads the update-after-bind limits (gotcha 637), and the cube-snapshot face is filled at the internal-resolution scale (gotcha 636: reflections above 720p were partly unwritten memory). That second one changes Linux reflections above 720p; the operator checked it on Linux at 3440x1440 the same day ("reflection looks fine").** **ALSO 2026-10-08: OPEN ITEM 0zj, THE "LAS VEGAS 46" SIGN THAT GETS HOLES WHILE THE CAMERA MOVES, IS PARKED; `docs/las-vegas-sign-holes.md` is the whole record and its next step (a draw-ID F9 of a bad frame).** **2026-10-08: TWO MORE FIXES, BOTH OPERATOR-VERIFIED, NEITHER IN A RELEASE YET** —
     `a3ade42` keeps the co-op bike spawn out of the save stream (overlay v7 had made every

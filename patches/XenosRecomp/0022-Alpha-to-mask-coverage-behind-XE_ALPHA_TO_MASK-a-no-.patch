@@ -1,0 +1,120 @@
+From e0c086ffd016694ab84ad5038faa7b64dbd9ba42 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Sat, 15 Aug 2026 22:18:52 -0400
+Subject: [PATCH 22/23] Alpha-to-mask coverage, behind XE_ALPHA_TO_MASK (a
+ no-op without it)
+
+Xenos applies ALPHA_TO_MASK in addition to the alpha test, turning fractional
+alpha into a per-sample coverage pattern in the MSAA surface. A host that
+rasterises one sample per guest SAMPLE can reproduce that exactly rather than
+approximate it, so the threshold the emitted test clips against becomes a
+function of SV_Position instead of a scalar.
+
+shader_common.h gains XeAlphaTestThreshold(pos), which returns g_AlphaThreshold
+unless the shader is built with XE_ALPHA_TO_MASK, in which case an A2M draw (flag
+published by the host at SharedConstants+284) takes max(threshold, 2x2 Bayer).
+shader_recompiler.cpp calls it in place of g_AlphaThreshold.
+
+Without the define this changes nothing: Dead Rising 2: Case Zero rebuilt its
+whole 434-shader cache from the new emitter and the canopy crop it was
+investigating came out byte-identical (md5 f4a1a593a15b3e27b40d59136aadf622)
+against the cache built before it.
+
+Why it matters there: that title's foliage draws GREATER at RB_ALPHA_REF = 0.0,
+at which the alpha test keeps everything and A2M is doing the whole cutout alone,
+over a DXT4/5 albedo whose per-leaf alpha is a ramp -- so a binary clip wrote the
+leaf cards' soft fringe at full opacity and feathery canopies came out as
+hard-edged plates.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ XenosRecomp/shader_common.h       | 46 +++++++++++++++++++++++++++++++
+ XenosRecomp/shader_recompiler.cpp |  8 +++++-
+ 2 files changed, 53 insertions(+), 1 deletion(-)
+
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index fb70eee..df060e5 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -50,6 +50,11 @@ struct PushConstants
+ // expanded each patch into, or 0 for an ordinary draw. 280 is the last free
+ // slot before the 1D-alias table at 288. See XeVertexSeed below.
+ #define g_TessGrid                 vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 280)
++// ALPHA-TO-MASK (Xenos RB_COLORCONTROL bit 4). Non-zero when the draw enables it AND
++// the guest surface is 4x MSAA. 284 is the last free dword before the 1D-alias table
++// at 288. See XeAlphaTestThreshold below for why a host renderer that rasterises one
++// sample per guest SAMPLE can emulate this exactly rather than approximately.
++#define g_AlphaToMask              vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 284)
+ // Fable2: window->NDC position transform (identity when the guest viewport
+ // transform is enabled); 1D descriptor indices occupy 288..351.
+ #define g_PosScale                 vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 352)
+@@ -391,6 +396,47 @@ float4 tfetchCube(uint resourceDescriptorIndex, uint samplerDescriptorIndex, flo
+ // before the asuint), decoded here exactly as XeVfetchDep's case 16 does: x = bits 0..10,
+ // y = 11..21, z = 22..31, sign bit at the top of each field. No spec constant: the fetch
+ // instruction's own format field says the data is packed, statically, per shader.
++// The threshold the emitted alpha test clips against.
++//
++// Ordinarily this is just RB_ALPHA_REF, as published by the runtime at +272. The
++// interesting case is ALPHA-TO-MASK, which Xenos applies IN ADDITION to the alpha
++// test: fractional alpha becomes a per-SAMPLE coverage pattern inside the 4x MSAA
++// surface, and the resolve averages it. A host that rasterises a single sample per
++// guest PIXEL can only approximate that. A host that rasterises a single sample per
++// guest SAMPLE — which is what Case Zero's renderer does, because it scales window
++// coordinates 2x in both axes for a 4x surface and lets the EDRAM image hold the
++// sample grid — can reproduce it exactly: one of its pixels IS one of hardware's
++// samples, so "is this sample covered" and "keep this pixel" are the same question,
++// and the answer is a per-sample threshold.
++//
++// WHY IT MATTERS, in one sentence, because the omission looked harmless for six
++// parts: this title's foliage draws GREATER at RB_ALPHA_REF = 0.0, at which the
++// alpha test keeps everything and A2M is doing all of the cutout work alone, over a
++// DXT4/5 albedo whose per-leaf alpha is a RAMP — so a binary clip writes the leaf
++// card's soft fringe at full opacity and a feathery canopy comes out as hard-edged
++// plates. Case Zero docs: phase5-notes §6ca, gotcha 317.
++//
++// The pattern is the standard 2x2 ordered dither, thresholds (i + 0.5) / 4 over the
++// four samples, so alpha 0.5 covers two of them. `pos` is SV_Position, whose integer
++// part indexes the sample grid directly.
++float XeAlphaTestThreshold(float2 pos)
++{
++// g_AlphaToMask only exists on the SPIR-V path (the DX path's shared constants are a
++// packoffset cbuffer with no free slot declared for it), so the arm is guarded on both.
++#if defined(XE_ALPHA_TO_MASK) && defined(__spirv__)
++    if (g_AlphaToMask != 0)
++    {
++        uint2 s = uint2(pos) & 1u;
++        // Bayer order over the 2x2 quad: 0 2 / 3 1.
++        const uint order[4] = { 0u, 2u, 3u, 1u };
++        const float coverage = (float(order[s.y * 2u + s.x]) + 0.5) / 4.0;
++        // Still subject to the alpha test itself — hardware applies both.
++        return max(g_AlphaThreshold, coverage);
++    }
++#endif
++    return g_AlphaThreshold;
++}
++
+ float4 XeUnpack_10_11_11(float rawBitsAsFloat)
+ {
+     uint raw = asuint(rawBitsAsFloat);
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index c03e7d7..35f726b 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -2437,7 +2437,13 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                     out += '{';
+ 
+                     indent();
+-                    out += "\tclip(oC0.w - g_AlphaThreshold);\n";
++                    // Not `g_AlphaThreshold` directly: ALPHA-TO-MASK needs the
++                    // threshold to vary PER SAMPLE, and a host that rasterises one
++                    // sample per guest sample can spell that exactly. The helper is
++                    // the identity (it returns g_AlphaThreshold) unless the shader is
++                    // built with XE_ALPHA_TO_MASK, so this line changes nothing for
++                    // any existing caller. shader_common.h has the derivation.
++                    out += "\tclip(oC0.w - XeAlphaTestThreshold(iPos.xy));\n";
+ 
+                     indent();
+                     out += "}";
+-- 
+2.55.0
+

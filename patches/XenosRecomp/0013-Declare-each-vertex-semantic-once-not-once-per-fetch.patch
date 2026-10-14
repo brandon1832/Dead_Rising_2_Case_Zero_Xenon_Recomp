@@ -1,0 +1,115 @@
+From 23fb35d9f15e02d7fe3104c89eff563a427c4397 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Sat, 1 Aug 2026 16:42:17 -0400
+Subject: [PATCH 13/23] Declare each vertex semantic once, not once per fetch
+ instruction
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A vertex declaration may name the same semantic more than once: the element
+list is keyed by FETCH ADDRESS, so two fetch instructions reading the same
+attribute from different constant slots each get their own VertexElement with
+the same (usage, usageIndex). The emitter walked the elements and printed one
+`main` parameter each, so the generated HLSL declared one input twice and DXC
+rejected the whole shader:
+
+    error: redefinition of parameter 'iTexCoord0'
+
+Declare each semantic once. The reads still resolve: a vfetch looks its element
+up by address and then names the input from that element's usage/usageIndex, so
+every duplicate address maps onto the one declared parameter — the same
+attribute it was always meant to read. Only the declaration is deduplicated;
+the address->element map still records every address.
+
+Measured on retail Fable 2. The whole shader bank (576 blobs) previously left
+six SKINNING/fur vertex shaders untranslatable — the long-standing "it emits one
+vertex-input block per fetch instruction, so a skinning shader declares
+iPosition1 six times" bug. With this change **every vertex shader in the bank
+translates**; the only remaining failure is one pixel shader with an unrelated
+defect (a texture sampled with no declared sampler). A live world capture turned
+up the same bug in a seventh shader, vs_39a8c75fd1bfcf85, which declares both
+iTexCoord0 and iTexCoord1 twice.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ XenosRecomp/pch.h                 |  1 +
+ XenosRecomp/shader_recompiler.cpp | 39 ++++++++++++++++++++++++-------
+ 2 files changed, 31 insertions(+), 9 deletions(-)
+
+diff --git a/XenosRecomp/pch.h b/XenosRecomp/pch.h
+index e59682c..c9592ad 100644
+--- a/XenosRecomp/pch.h
++++ b/XenosRecomp/pch.h
+@@ -12,6 +12,7 @@
+ #include <execution>
+ #include <filesystem>
+ #include <map>
++#include <set>
+ #include <smolv.h>
+ #include <fmt/core.h>
+ #include <string>
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 2b6bcce..34f4b74 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -1433,6 +1433,22 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     else
+     {
+         auto vertexShader = reinterpret_cast<const VertexShader*>(shader);
++        // A vertex declaration may name the same semantic more than once: the
++        // element list is keyed by FETCH ADDRESS, and two fetch instructions
++        // reading the same attribute from different constant slots each get their
++        // own element with the same (usage, usageIndex). Emitting a parameter per
++        // element then declares one HLSL input twice and the whole shader fails to
++        // compile ("redefinition of parameter 'iTexCoord0'"). Measured in retail
++        // Fable2: vs_39a8c75fd1bfcf85 declares iTexCoord0/iTexCoord1 twice, and
++        // the SKINNING/fur shaders declare iPosition1 six times.
++        //
++        // Declare each semantic once. The reads still resolve, because a vfetch
++        // looks its element up by ADDRESS and then names the input from that
++        // element's usage/usageIndex — so every duplicate address maps onto the one
++        // declared parameter, which is the same attribute it was always meant to
++        // read. Only the declaration is deduplicated; vertexElements still records
++        // every address.
++        std::set<uint32_t> declaredUsages;
+         for (uint32_t i = 0; i < vertexShader->vertexElementCount; i++)
+         {
+             union
+@@ -1453,19 +1469,24 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+             }
+         #endif
+ 
+-            out += '\t';
+-
+-            for (auto& usageLocation : USAGE_LOCATIONS)
++            const uint32_t usageKey =
++                (uint32_t(vertexElement.usage) << 16) | uint32_t(vertexElement.usageIndex);
++            if (declaredUsages.emplace(usageKey).second)
+             {
+-                if (usageLocation.usage == vertexElement.usage && usageLocation.usageIndex == vertexElement.usageIndex)
++                out += '\t';
++
++                for (auto& usageLocation : USAGE_LOCATIONS)
+                 {
+-                    print("[[vk::location({})]] ", usageLocation.location);
+-                    break;
++                    if (usageLocation.usage == vertexElement.usage && usageLocation.usageIndex == vertexElement.usageIndex)
++                    {
++                        print("[[vk::location({})]] ", usageLocation.location);
++                        break;
++                    }
+                 }
+-            }
+ 
+-            println("in {0} i{1}{2} : {3}{2},", usageType, USAGE_VARIABLES[uint32_t(vertexElement.usage)],
+-                uint32_t(vertexElement.usageIndex), USAGE_SEMANTICS[uint32_t(vertexElement.usage)]);
++                println("in {0} i{1}{2} : {3}{2},", usageType, USAGE_VARIABLES[uint32_t(vertexElement.usage)],
++                    uint32_t(vertexElement.usageIndex), USAGE_SEMANTICS[uint32_t(vertexElement.usage)]);
++            }
+ 
+             vertexElements.emplace(uint32_t(vertexElement.address), vertexElement);
+         }
+-- 
+2.55.0
+

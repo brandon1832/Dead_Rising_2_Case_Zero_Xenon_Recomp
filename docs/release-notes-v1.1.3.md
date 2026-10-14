@@ -40,6 +40,11 @@ artifact is ever rebuilt, refresh its hash below and in `SHA256SUMS` before atta
 >
 > Starting the game any other way = **OFFLINE MODE ONLY**.
 
+> **This is the final release.** The maintainer has stopped working on the port, so no
+> further updates are planned and issues may go unanswered. The code, the recompiler
+> patches and the whole development record stay in the repository for anyone who wants
+> to continue it (`docs/final-state.md`).
+
 Co-op can now be played to the end, three new detail settings bring distant zombies,
 buildings and shadows closer to what you see up close, Chuck's hair stops flickering, and
 the renderer is about 1 ms a frame faster in big crowds.

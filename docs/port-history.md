@@ -7121,3 +7121,23 @@ hand-off until part 117 that afternoon; gotchas 559-564):
   oracles clean, E3 **+0.8472** (4 of 5), `phase_vs_perf.py --self-test` PASSED. Owed:
   nothing (the default is the poll every release shipped with), the Windows spelling of the thread clocks.
 
+
+## The end: v1.1.3 (2026-10-13/14) — the last release
+
+The release legs ran from master `a0e4f35`: Linux old-base tarball + AppImage (identity
+gate, ubuntu:22.04 container gates), Steam Deck (`CZ_DECK`), Windows on czwin. The
+operator's QA of the Windows build found the Resolution list stopping at 1600x900 on a
+150%-scaled 2560x1440 laptop: the launcher and the progress window started SDL video
+before the DPI-awareness hint, and Windows fixes a process's awareness once — every
+launcher boot since the launcher existed had run DPI-unaware (`9191cb0`; same-session
+`--diag` read 1707x960 on the old exe, 2560x1440 on the new). The pre-v7 save gate passed
+on the staged Linux binary.
+
+Then the FIRST macOS artifact (`tools/release_package_macos.sh`, `macos-build-setup.md`
+"Release"), which needed three fixes of its own (`b95db1a`, `aec03c6`, `bcaed0d`) and was
+played by the operator on the M1. Tag `v1.1.3` was moved to `51df8c7` before publication
+so the tag contains them.
+
+At the close the operator said: *"I won't work on this project anymore so 1.1.3 is the
+official last update from me."* The recompiler patches, which had existed only in local
+checkouts, were exported to `patches/`; `docs/final-state.md` is the hand-off.

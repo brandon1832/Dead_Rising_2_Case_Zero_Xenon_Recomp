@@ -1,0 +1,61 @@
+From 7367a281bba21d5db07ed1fb61e62a916d1c82b8 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Fri, 14 Aug 2026 22:31:34 -0400
+Subject: [PATCH 21/23] Skip the register writeback for a vfetch whose
+ destination mask is empty
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A vfetch_full whose destination swizzle names no register component (every
+lane keep/0/1) exists only for the fetch slot and stride its mini-fetches
+inherit. The emitter still printed the assignment head and trailing swizzle,
+producing 'r0. = XeVfetchDep(...).;', which DXC rejects. Found by Dead Rising
+2 Case Zero's vs_c8e86dffb37149dd — eight of them in one shader, the only
+translation failure in a 435-shader bank. The 0/1 lanes still land through
+printDstSwizzle01, and predication brackets stay balanced.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ XenosRecomp/shader_recompiler.cpp | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 6a989b2..c03e7d7 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -370,6 +370,31 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
+         ++indentation;
+     }
+ 
++    // A vfetch whose destination mask names no register component (every lane
++    // Keep/0/1) writes no fetched data back: it is the "full" half of a
++    // full+mini pair, present only for the slot and stride the mini-fetches
++    // inherit above. Emitting the assignment anyway produced `r0. = expr.;`,
++    // which DXC rejects — Case Zero's vs_c8e86dffb37149dd is eight of them in a
++    // row. The 0/1 lanes still land via printDstSwizzle01.
++    bool writesAnyComponent = false;
++    for (size_t i = 0; i < 4; i++)
++    {
++        const auto s = getDestSwizzle(instr.dstSwizzle, i);
++        if (s >= FetchDestinationSwizzle::X && s <= FetchDestinationSwizzle::W)
++            writesAnyComponent = true;
++    }
++    if (!writesAnyComponent)
++    {
++        printDstSwizzle01(instr.dstRegister, instr.dstSwizzle);
++        if (instr.isPredicated)
++        {
++            --indentation;
++            indent();
++            out += "}\n";
++        }
++        return;
++    }
++
+     indent();
+     print("r{}.", instr.dstRegister);
+     printDstSwizzle(instr.dstSwizzle, false);
+-- 
+2.55.0
+

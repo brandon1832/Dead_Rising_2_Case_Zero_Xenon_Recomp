@@ -83,7 +83,46 @@ resolution above 720p; only the colour of the garbage differed. Fixed by clampin
 the image and clearing the cube at creation. **Operator-verified: "reflections are fine
 now"; and on Linux at 3440x1440 the same day: "reflection looks fine".** For Case West: same engine, same cube path — check the clamp.
 
-## Owed
+## Release (v1.1.3, 2026-10-14) — the first and only macOS artifact
+
+`CaseZeroRecomp-macos-arm64.zip`, built at `bcaed0d`. The Release tree links **real SDL2**
+and the **LGPL xma-only ffmpeg**, built on the Mac with the same flags as
+`tools/build_sdl2.sh` / `tools/build_ffmpeg_lgpl.sh` (those two scripts assume Linux —
+`nproc`, `.so` names — so they were run by hand into `~/cz/thirdparty/{sdl2,ffmpeg-lgpl}`).
+Homebrew's `sdl2` is **sdl2-compat** and its ffmpeg is GPL; neither may ship.
+
+```
+cmake -S runtime -B runtime/build-release -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DXENON_ROOT=$HOME/cz/XenonRecomp -DXENOS_ROOT=$HOME/cz/XenosRecomp -DXLIVE_ROOT=$HOME/cz/XenonLive \
+  -DCZ_FFMPEG_PREFIX=$HOME/cz/thirdparty/ffmpeg-lgpl -DCZ_SDL2_PREFIX=$HOME/cz/thirdparty/sdl2 \
+  -DCZ_BUNDLE_RPATH=OFF -DCZ_SPLIT_DEBUG=OFF       # $ORIGIN and objcopy are Linux-only
+ninja -C runtime/build-release -j4
+tools/release_package_macos.sh                   # -> dist/CaseZeroRecomp-macos-arm64.zip
+```
+
+The script's header explains the layout. Four things the first package hit, each fixed:
+
+1. **codesign refuses any non-code file in `Contents/MacOS`** ("code object is not signed
+   at all", on `kbm_chips/`). Data lives in `Contents/Resources`
+   (`HostPaths::ShippedDir()`, `b95db1a`), libraries in `Contents/Frameworks`.
+2. **A universal DXC carries two rpath entries**; it is thinned to arm64 (half the size).
+3. **Real SDL2 refuses `SDL_Vulkan_GetInstanceExtensions` after `SDL_Metal_CreateView`**
+   ("The specified window isn't a Vulkan window"), which sdl2-compat had answered, so the
+   package fell back to the readback present path: 65 fps, black window. The two
+   extensions are named directly now (`bcaed0d`).
+4. **A quarantined app is TRANSLOCATED** to a random read-only path when opened, and the
+   root walk then cannot find `assets/` beside it. Players run
+   `xattr -dr com.apple.quarantine <folder>` once (release notes, README). Notarisation
+   (the paid account) is the real fix and was never bought.
+
+Gates run: `codesign --verify --strict`; `--smoke` on the staged executable; a fresh
+unzip with only the bundled MoltenVK (`VK_DRIVER_FILES`) through the whole first run
+(extract, 1,367 shaders via the bundled DXC, overlays) to a rendered title screen;
+`lsof` showing every non-system dylib loaded from inside the bundle; the operator played
+it windowed. macOS has no `timeout` (use `perl -e 'alarm N; exec @ARGV'`), and SIP strips
+`DYLD_*` variables through `/usr/bin/perl`, so `DYLD_PRINT_LIBRARIES` reads nothing there.
+
+## Owed (as of the end of the project)
 
 - gameplay on the Mac: input, audio, saves, the crowd's frame time;
 - DXC on macOS (first-sight vertex-shader translation; the cache built on Linux is

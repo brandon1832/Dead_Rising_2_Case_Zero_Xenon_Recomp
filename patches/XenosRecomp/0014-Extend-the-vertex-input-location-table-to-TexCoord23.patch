@@ -1,0 +1,64 @@
+From 6a89b4f030360cd35c4a326e4a27ced044500954 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Sun, 2 Aug 2026 12:50:03 -0400
+Subject: [PATCH 14/23] Extend the vertex-input location table to TexCoord23
+ (location 31)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Fable2's deferred-IB world stream contains vs_39a8c75fd1bfcf85, a vertex
+shader with NINETEEN vertex-fetch streams — TexCoord0..17. The table
+stopped at TexCoord15 (location 23), so the two streams past it had no
+Vulkan input location and the shader could not be bound at all.
+
+Locations 24..31 were simply unused, and 32 is the number of vertex input
+attributes desktop Vulkan guarantees, so this extends to exactly that
+ceiling. Keep Fable2XenonRecomp's tools/synth_shader_container.py
+USAGE_LOCATION table in sync — it derives the same mapping independently.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ XenosRecomp/shader_recompiler.cpp | 17 ++++++++++++++++-
+ 1 file changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 34f4b74..3812fbf 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -94,9 +94,16 @@ static constexpr DeclUsageLocation USAGE_LOCATIONS[] =
+     { DeclUsage::TexCoord, 6, 14 },
+     { DeclUsage::TexCoord, 7, 15 },
+     { DeclUsage::Position, 1, 15 },
+-    // Fable2 world vertex shaders take up to 12 vertex streams; 16..23 stay
++    // Fable2 world vertex shaders take up to 12 vertex streams; 16..31 stay
+     // within the 32 vertex-input locations desktop Vulkan guarantees. Keep
+     // tools/synth_shader_container.py's USAGE_LOCATION table in sync.
++    //
++    // Extended to TexCoord23 (location 31, the last one Vulkan guarantees) on
++    // 2026-08-02: a deferred-IB world run turned up vs_39a8c75fd1bfcf85 with
++    // NINETEEN vertex-fetch streams, i.e. TexCoord0..17, which ran off the end
++    // of a table that stopped at 15. The cost of the missing two entries was
++    // 25,364 draws per run silently skipped as "unknown vs" — see
++    // Fable2XenonRecomp docs/world-era-fatal-and-selector.md §2o.
+     { DeclUsage::TexCoord, 8, 16 },
+     { DeclUsage::TexCoord, 9, 17 },
+     { DeclUsage::TexCoord, 10, 18 },
+@@ -105,6 +112,14 @@ static constexpr DeclUsageLocation USAGE_LOCATIONS[] =
+     { DeclUsage::TexCoord, 13, 21 },
+     { DeclUsage::TexCoord, 14, 22 },
+     { DeclUsage::TexCoord, 15, 23 },
++    { DeclUsage::TexCoord, 16, 24 },
++    { DeclUsage::TexCoord, 17, 25 },
++    { DeclUsage::TexCoord, 18, 26 },
++    { DeclUsage::TexCoord, 19, 27 },
++    { DeclUsage::TexCoord, 20, 28 },
++    { DeclUsage::TexCoord, 21, 29 },
++    { DeclUsage::TexCoord, 22, 30 },
++    { DeclUsage::TexCoord, 23, 31 },
+ };
+ 
+ static constexpr std::pair<DeclUsage, size_t> INTERPOLATORS[] =
+-- 
+2.55.0
+

@@ -1,0 +1,251 @@
+From a2462d94a53abe7632398e97a42d1001451785fd Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Mon, 20 Jul 2026 00:29:14 -0400
+Subject: [PATCH 07/23] Fable2 world shaders: memexport sinks, 64 GPRs, vertex
+ texture fetch, TEXCOORD8-15 locations
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Four gaps hit by Fable2's Bowerstone world shaders (all found translating the
+first in-world dump; 19 of 238 shaders failed before, 9 after):
+
+- MemExport: exports 32 (eA) / 33-37 (eM0-4) had no case in either stage's
+  export switch — a VS memexport hit the interpolator-map assert and pixel
+  shaders emitted nothing. Routed into dead float4 locals: Fable2 uses
+  memexport for GPU measurement passes (screen extents / visibility read back
+  via D3D async queries), so the streams' consumers are queries, not the
+  rasterizer; the shader's oPos/interpolator outputs still render. Dedicated
+  sinks rather than the r{dest} fallback so register-heavy shaders don't get
+  their live temps clobbered. Export 63 (point size / edge flag / kill) gets a
+  sink too.
+
+- GPRs: declarations stopped at r31; Xenos has 64 per thread and these
+  shaders read past r31 (undeclared r63 in the emitted HLSL).
+
+- Vertex texture fetch: the tfetch helpers used implicit-LOD Sample(), which
+  DXC rejects outside fragment/compute. XENOS_SAMPLE macro selects
+  SampleLevel(..., 0) when the recompiler defines XENOS_VERTEX_SHADER before
+  the include — LOD 0 matches hardware VTF, which has no derivatives either.
+
+- Vertex inputs: world VSs take up to 12 streams; TEXCOORD8-15 now map to
+  Vulkan locations 16-23 (within the 32 desktop Vulkan guarantees). Keep
+  Fable2XenonRecomp/tools/synth_shader_container.py in sync.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ XenosRecomp/shader_common.h       | 26 +++++++---
+ XenosRecomp/shader_recompiler.cpp | 84 +++++++++++++++++++++++++++++--
+ 2 files changed, 98 insertions(+), 12 deletions(-)
+
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index fb2e7e3..de66f59 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -12,6 +12,16 @@
+ 
+ #if !defined(__cplusplus) || defined(__INTELLISENSE__)
+ 
++// Implicit-LOD Sample() is illegal outside fragment/compute stages, and Fable2
++// vertex shaders fetch textures (vertex texture fetch). The recompiler defines
++// XENOS_VERTEX_SHADER before including this header for a VS; hardware VTF has
++// no derivatives either, so LOD 0 matches Xenos behaviour.
++#ifdef XENOS_VERTEX_SHADER
++    #define XENOS_SAMPLE(TEXTURE, SAMPLER, COORD) (TEXTURE).SampleLevel(SAMPLER, COORD, 0.0)
++#else
++    #define XENOS_SAMPLE(TEXTURE, SAMPLER, COORD) (TEXTURE).Sample(SAMPLER, COORD)
++#endif
++
+ #define FLT_MIN asfloat(0xff7fffff)
+ #define FLT_MAX asfloat(0x7f7fffff)
+ 
+@@ -83,13 +93,13 @@ uint2 getTexture2DDimensions(Texture2D<float4> texture)
+ float4 tfetch1D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float texCoord)
+ {
+     Texture1D<float4> texture = g_Texture1DDescriptorHeap[resourceDescriptorIndex];
+-    return texture.Sample(g_SamplerDescriptorHeap[samplerDescriptorIndex], texCoord);
++    return XENOS_SAMPLE(texture, g_SamplerDescriptorHeap[samplerDescriptorIndex], texCoord);
+ }
+ 
+ float4 tfetch2D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float2 texCoord, float2 offset)
+ {
+     Texture2D<float4> texture = g_Texture2DDescriptorHeap[resourceDescriptorIndex];
+-    return texture.Sample(g_SamplerDescriptorHeap[samplerDescriptorIndex], texCoord + offset / getTexture2DDimensions(texture));
++    return XENOS_SAMPLE(texture, g_SamplerDescriptorHeap[samplerDescriptorIndex], texCoord + offset / getTexture2DDimensions(texture));
+ }
+ 
+ float2 getWeights2D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float2 texCoord, float2 offset)
+@@ -162,17 +172,17 @@ float4 tfetch2DBicubic(uint resourceDescriptorIndex, uint samplerDescriptorIndex
+     float h1y = h1(fy);
+ 
+     float4 r =
+-        g0(fy) * (g0x * texture.Sample(samplerState, float2(px + h0x, py + h0y) / float2(dimensions)) +
+-            g1x * texture.Sample(samplerState, float2(px + h1x, py + h0y) / float2(dimensions))) +
+-        g1(fy) * (g0x * texture.Sample(samplerState, float2(px + h0x, py + h1y) / float2(dimensions)) +
+-            g1x * texture.Sample(samplerState, float2(px + h1x, py + h1y) / float2(dimensions)));
++        g0(fy) * (g0x * XENOS_SAMPLE(texture, samplerState, float2(px + h0x, py + h0y) / float2(dimensions)) +
++            g1x * XENOS_SAMPLE(texture, samplerState, float2(px + h1x, py + h0y) / float2(dimensions))) +
++        g1(fy) * (g0x * XENOS_SAMPLE(texture, samplerState, float2(px + h0x, py + h1y) / float2(dimensions)) +
++            g1x * XENOS_SAMPLE(texture, samplerState, float2(px + h1x, py + h1y) / float2(dimensions)));
+ 
+     return r;
+ }
+ 
+ float4 tfetch3D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float3 texCoord)
+ {
+-    return g_Texture3DDescriptorHeap[resourceDescriptorIndex].Sample(g_SamplerDescriptorHeap[samplerDescriptorIndex], texCoord);
++    return XENOS_SAMPLE(g_Texture3DDescriptorHeap[resourceDescriptorIndex], g_SamplerDescriptorHeap[samplerDescriptorIndex], texCoord);
+ }
+ 
+ struct CubeMapData
+@@ -183,7 +193,7 @@ struct CubeMapData
+ 
+ float4 tfetchCube(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float3 texCoord, inout CubeMapData cubeMapData)
+ {
+-    return g_TextureCubeDescriptorHeap[resourceDescriptorIndex].Sample(g_SamplerDescriptorHeap[samplerDescriptorIndex], cubeMapData.cubeMapDirections[texCoord.z]);
++    return XENOS_SAMPLE(g_TextureCubeDescriptorHeap[resourceDescriptorIndex], g_SamplerDescriptorHeap[samplerDescriptorIndex], cubeMapData.cubeMapDirections[texCoord.z]);
+ }
+ 
+ float4 tfetchR11G11B10(uint4 value)
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 6f13837..6e90645 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -94,6 +94,17 @@ static constexpr DeclUsageLocation USAGE_LOCATIONS[] =
+     { DeclUsage::TexCoord, 6, 14 },
+     { DeclUsage::TexCoord, 7, 15 },
+     { DeclUsage::Position, 1, 15 },
++    // Fable2 world vertex shaders take up to 12 vertex streams; 16..23 stay
++    // within the 32 vertex-input locations desktop Vulkan guarantees. Keep
++    // tools/synth_shader_container.py's USAGE_LOCATION table in sync.
++    { DeclUsage::TexCoord, 8, 16 },
++    { DeclUsage::TexCoord, 9, 17 },
++    { DeclUsage::TexCoord, 10, 18 },
++    { DeclUsage::TexCoord, 11, 19 },
++    { DeclUsage::TexCoord, 12, 20 },
++    { DeclUsage::TexCoord, 13, 21 },
++    { DeclUsage::TexCoord, 14, 22 },
++    { DeclUsage::TexCoord, 15, 23 },
+ };
+ 
+ static constexpr std::pair<DeclUsage, size_t> INTERPOLATORS[] =
+@@ -600,12 +611,66 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+             case ExportRegister::PSDepth:
+                 exportRegister = "oDepth";
+                 break;
++
++            // MemExport (Fable2 uses it from pixel shaders too): route the
++            // writes into dead locals — see the VS case below for rationale.
++            case ExportRegister::ExportAddress:
++                exportRegister = "eA";
++                break;
++            case ExportRegister::ExportData0:
++                exportRegister = "eM0";
++                break;
++            case ExportRegister::ExportData1:
++                exportRegister = "eM1";
++                break;
++            case ExportRegister::ExportData2:
++                exportRegister = "eM2";
++                break;
++            case ExportRegister::ExportData3:
++                exportRegister = "eM3";
++                break;
++            case ExportRegister::ExportData4:
++                exportRegister = "eM4";
++                break;
+             }
+         }
+         else
+         {
+             switch (ExportRegister(instr.vectorDest))
+             {
++            // MemExport: eA holds a packed memory address + format, eM0-4 the
++            // data the GPU streams out. Fable2's world pipeline uses this for
++            // GPU-side measurement passes (screen extents / visibility, read
++            // back through D3D async queries). No SPIR-V equivalent is
++            // attempted here — the writes land in dead locals so the shader
++            // still compiles and its oPos/interpolator side (if any) renders.
++            // Dedicated sinks rather than the r{dest} fallback: aliasing high
++            // GPRs would clobber live temps in register-heavy shaders.
++            case ExportRegister::ExportAddress:
++                exportRegister = "eA";
++                break;
++            case ExportRegister::ExportData0:
++                exportRegister = "eM0";
++                break;
++            case ExportRegister::ExportData1:
++                exportRegister = "eM1";
++                break;
++            case ExportRegister::ExportData2:
++                exportRegister = "eM2";
++                break;
++            case ExportRegister::ExportData3:
++                exportRegister = "eM3";
++                break;
++            case ExportRegister::ExportData4:
++                exportRegister = "eM4";
++                break;
++
++            // x = point size, y = edge flag, z = kill-vertex. Only the kill
++            // bit would change rendering; a sink keeps the shader compiling.
++            case ExportRegister::VSPointSizeEdgeFlagKillVertex:
++                exportRegister = "oPtSizeEdgeKill";
++                break;
++
+             case ExportRegister::VSPosition:
+                 exportRegister = "oPos";
+ 
+@@ -1106,11 +1171,16 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     assert((shaderContainer->flags & 0xFFFFFF00) == 0x102A1100);
+     assert(shaderContainer->constantTableOffset != NULL);
+ 
++    isPixelShader = (shaderContainer->flags & 0x1) == 0;
++
++    // Selects SampleLevel(…, 0) in shader_common.h's tfetch helpers: implicit-LOD
++    // Sample() is illegal in a vertex shader, and Fable2 uses vertex texture fetch.
++    if (!isPixelShader)
++        out += "#define XENOS_VERTEX_SHADER\n";
++
+     out += include;
+     out += '\n';
+ 
+-    isPixelShader = (shaderContainer->flags & 0x1) == 0;
+-
+     const auto constantTableContainer = reinterpret_cast<const ConstantTableContainer*>(shaderData + shaderContainer->constantTableOffset);
+     constantTableData = reinterpret_cast<const uint8_t*>(&constantTableContainer->constantTable);
+ 
+@@ -1435,7 +1505,9 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     }
+     out += "\n";
+ 
+-    bool printedRegisters[32]{};
++    // Xenos supports up to 64 GPRs per thread; Fable2's memexport-era shaders
++    // read past r31 (r63 showed up as a source), so declare the full set.
++    bool printedRegisters[64]{};
+ 
+     uint32_t interpolatorCount = (shader->interpolatorInfo >> 5) & 0x1F;
+ 
+@@ -1474,7 +1546,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         out += "\n";
+     }
+ 
+-    for (size_t i = 0; i < 32; i++)
++    for (size_t i = 0; i < 64; i++)
+     {
+         if (!printedRegisters[i])
+         {
+@@ -1500,6 +1572,10 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     out += "\tint aL = 0;\n";
+     out += "\tbool p0 = false;\n";
+     out += "\tfloat ps = 0.0;\n";
++    // MemExport + point-size sinks (see the export-register switch).
++    out += "\tfloat4 eA = 0.0;\n";
++    out += "\tfloat4 eM0 = 0.0, eM1 = 0.0, eM2 = 0.0, eM3 = 0.0, eM4 = 0.0;\n";
++    out += "\tfloat4 oPtSizeEdgeKill = 0.0;\n";
+     if (isPixelShader)
+     {
+ #ifdef UNLEASHED_RECOMP
+-- 
+2.55.0
+

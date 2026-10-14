@@ -1,0 +1,106 @@
+From f1206183f36270d432b49be07b430779f6c410ae Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Fri, 9 Oct 2026 13:56:07 -0400
+Subject: [PATCH 14/14] arm64: real fences for lwsync/eieio,
+ consumer-overridable __rdtsc, 64-bit FPCR write
+
+x86-64 codegen is unchanged: PPC_LWSYNC/PPC_EIEIO expand to the same compiler-only
+fence there. arm64 is not TSO, so they become dmb ish.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018NEKjYNFoqoyvropRra3TQ
+---
+ XenonRecomp/recompiler.cpp | 14 +++++++++-----
+ XenonUtils/ppc_context.h   | 23 ++++++++++++++++++++---
+ 2 files changed, 29 insertions(+), 8 deletions(-)
+
+diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
+index c57b162..c19877d 100644
+--- a/XenonRecomp/recompiler.cpp
++++ b/XenonRecomp/recompiler.cpp
+@@ -945,8 +945,9 @@ bool Recompiler::Recompile(
+         // Orders stores to device memory. Our MMIO is ordinary host memory polled by
+         // other threads, so a compiler barrier is the honest floor: it stops the host
+         // compiler reordering the stores the guest deliberately separated, and claims
+-        // nothing about a memory controller we do not model.
+-        println("\tstd::atomic_signal_fence(std::memory_order_seq_cst);");
++        // nothing about a memory controller we do not model. On arm64 PPC_EIEIO() is a
++        // real release fence (ppc_context.h): ARM, unlike x86, may reorder the stores.
++        println("\tPPC_EIEIO();");
+         break;
+ 
+     case PPC_INST_EQV:
+@@ -1392,9 +1393,12 @@ bool Recompiler::Recompile(
+         // the buffer, lwsync, publish the index" becomes "publish the index, fill the
+         // buffer", and the consumer thread walks half-written data.
+         //
+-        // atomic_signal_fence is exactly the right tool: it constrains the compiler
+-        // and emits no instruction.
+-        println("\tstd::atomic_signal_fence(std::memory_order_seq_cst);");
++        // atomic_signal_fence is exactly the right tool ON x86: it constrains the
++        // compiler and emits no instruction. arm64 is NOT TSO — it reorders all three
++        // of those pairs in hardware — so there PPC_LWSYNC() is a real `dmb ish`. The
++        // choice is made in ppc_context.h at host compile time, so one generated tree
++        // is correct on both and x86 codegen is unchanged.
++        println("\tPPC_LWSYNC();");
+         break;
+ 
+     case PPC_INST_LWZ:
+diff --git a/XenonUtils/ppc_context.h b/XenonUtils/ppc_context.h
+index 75a73d1..342cb05 100644
+--- a/XenonUtils/ppc_context.h
++++ b/XenonUtils/ppc_context.h
+@@ -6,6 +6,18 @@
+ #endif
+ 
+ #include <atomic> // sync/lwsync/eieio lower to std::atomic_*_fence
++
++// The guest's lightweight barriers. PowerPC is weakly ordered; x86-64 is TSO, which
++// already provides every ordering lwsync/eieio ask for, so there only the COMPILER must
++// be stopped. arm64 is weakly ordered like the guest, so there they need real fences
++// (both lower to `dmb ish`). `sync` is always a seq_cst thread fence and needs no macro.
++#if defined(__aarch64__) || defined(_M_ARM64)
++#define PPC_LWSYNC() std::atomic_thread_fence(std::memory_order_acq_rel)
++#define PPC_EIEIO() std::atomic_thread_fence(std::memory_order_release)
++#else
++#define PPC_LWSYNC() std::atomic_signal_fence(std::memory_order_seq_cst)
++#define PPC_EIEIO() std::atomic_signal_fence(std::memory_order_seq_cst)
++#endif
+ #include <climits>
+ #include <cmath>
+ #include <csetjmp>
+@@ -287,7 +299,9 @@ struct PPCFPSCRRegister
+ 
+     inline void setcsr(uint32_t csr) noexcept
+     {
+-        __asm__ __volatile__("msr fpcr, %0" : : "r"(csr));
++        // FPCR is a 64-bit system register; widen explicitly so the upper half of the
++        // X register is zero rather than whatever the compiler left there.
++        __asm__ __volatile__("msr fpcr, %0" : : "r"(uint64_t(csr)));
+     }
+ #else
+ #   error "Missing implementation for FPSCR."
+@@ -740,7 +754,10 @@ inline simde__m128i simde_mm_vsr(simde__m128i a, simde__m128i b)
+     return simde_mm_castps_si128(simde_mm_insert_ps(simde_mm_castsi128_ps(simde_mm_srl_epi64(a, b)), simde_mm_castsi128_ps(simde_mm_srl_epi64(simde_mm_srli_si128(a, 4), b)), 0x10));
+ }
+ 
+-#if defined(__aarch64__) || defined(_M_ARM64)
++// `!defined(__rdtsc)`: a consumer that substitutes its own timebase (a function-like
++// macro force-included ahead of this header, as Case Zero's guest timebase does) must
++// not have this definition rewritten into a redefinition of ITS function.
++#if (defined(__aarch64__) || defined(_M_ARM64)) && !defined(__rdtsc)
+ inline uint64_t __rdtsc()
+ {
+     uint64_t ret;
+@@ -748,7 +765,7 @@ inline uint64_t __rdtsc()
+                  : "=r"(ret)::"memory");
+     return ret;
+ }
+-#elif !defined(__x86_64__) && !defined(_M_X64)
++#elif !defined(__x86_64__) && !defined(_M_X64) && !defined(__rdtsc)
+ #   error "Missing implementation for __rdtsc()"
+ #endif
+ 
+-- 
+2.55.0
+

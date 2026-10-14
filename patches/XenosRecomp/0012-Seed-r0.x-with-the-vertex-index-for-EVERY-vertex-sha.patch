@@ -1,0 +1,82 @@
+From 76917acee3b22c108cdff791dfff97e25b4d3ac4 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Sat, 25 Jul 2026 14:35:30 -0400
+Subject: [PATCH 12/23] Seed r0.x with the vertex index for EVERY vertex
+ shader, not only no-vfetch ones
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Xenos auto-loads the vertex index into r0.x at vertex-shader thread start,
+unconditionally. This translator emitted the SV_VertexID input and the r0.x seed
+only when `vertexElementCount == 0` — a gate added for Fable 2's no-vfetch
+fullscreen-quad post chain, which cannot rasterize at all without it. Shaders
+that DO fetch vertex elements were left with r0.x = 0.0.
+
+They read it too. The measured case is Fable 2's logo-halo sparkle vertex shader
+(25ca98899c8ff1f8): it fetches three per-particle attributes AND expands each
+particle to a quad with `MUL r0.xxxx, c255.xxyy` (index * 0.25/0.5 selects the
+corner), then derives its texture coordinates from the same register. With r0.x
+pinned at zero every sparkle sampled a single texel of its glow sprite and came
+out black, so the additive ONE/ONE pass wrote nothing — the missing FABLE II logo
+halo. A SPIR-V scan of the translated shader named it: no VertexIndex builtin
+declared at all.
+
+Making the seed unconditional is what hardware does, so it is strictly more
+faithful; shaders that ignore r0.x are unaffected.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ XenosRecomp/shader_recompiler.cpp | 28 +++++++++++++++++-----------
+ 1 file changed, 17 insertions(+), 11 deletions(-)
+
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index cf34ced..2b6bcce 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -1477,13 +1477,19 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+             out += "\tin uint iInstanceId : SV_InstanceID,\n";
+         }
+     #endif
+-        // A vertex shader with NO vertex elements gets its geometry from the
+-        // auto-loaded vertex index (Xenos seeds r0.x with it at thread start) —
+-        // Fable2's whole post/composite chain draws fullscreen quads this way.
+-        // Without this every no-vfetch vertex is identical: degenerate
+-        // triangles, nothing rasterized.
+-        if (vertexShader->vertexElementCount == 0)
+-            out += "\tin uint iVertexId : SV_VertexID,\n";
++        // Xenos seeds r0.x with the auto-loaded vertex index at thread start for
++        // EVERY vertex shader — not only the ones that fetch nothing. Fable2's
++        // whole post/composite chain draws fullscreen quads with no vertex
++        // elements and needs it for geometry at all; but shaders that DO fetch
++        // read r0.x too, to derive per-vertex values the fetch cannot give them.
++        // The logo-halo sparkle VS (25ca98899c8ff1f8) is the measured case: it
++        // fetches three per-particle attributes AND expands each particle to a
++        // quad with `MUL r0.xxxx, c255.xxyy` (index * 0.25/0.5 -> corner select),
++        // then derives its texcoords from the same register. Gating the input on
++        // vertexElementCount == 0 left r0.x at 0.0 there, so every sparkle
++        // sampled one texel of its glow sprite and the particles came out black
++        // — the missing FABLE II logo halo.
++        out += "\tin uint iVertexId : SV_VertexID,\n";
+ 
+         out += "\tout float4 oPos : SV_Position";
+ 
+@@ -1635,11 +1641,11 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                 out += "float4(iVertexId + g_IndexCount.x * iInstanceId, 0.0, 0.0, 0.0);\n";
+             }
+         #endif
+-            else if (!isPixelShader && i == 0 &&
+-                     reinterpret_cast<const VertexShader*>(shader)->vertexElementCount == 0)
++            else if (!isPixelShader && i == 0)
+             {
+-                // No-vfetch VS: r0.x = the auto-loaded vertex index (see the
+-                // SV_VertexID input above).
++                // Every VS: r0.x = the auto-loaded vertex index (see the
++                // SV_VertexID input above). Unconditional, as on hardware —
++                // shaders that fetch vertex elements read it as well.
+                 out += "float4(iVertexId, 0.0, 0.0, 0.0);\n";
+             }
+             else
+-- 
+2.55.0
+

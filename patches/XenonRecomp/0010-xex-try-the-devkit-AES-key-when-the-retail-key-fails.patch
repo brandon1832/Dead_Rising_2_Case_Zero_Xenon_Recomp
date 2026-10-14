@@ -1,0 +1,294 @@
+From 10ddd24a06c3c7ac5e011884c341c70bbdcb096e Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Tue, 4 Aug 2026 11:06:00 -0400
+Subject: [PATCH 10/14] xex: try the devkit AES key when the retail key fails
+
+Xbox 360 XEXs encrypted with XEX_ENCRYPTION_NORMAL use one of two AES keys --
+the retail key or the all-zero "devkit" key -- and nothing in the header
+distinguishes them; encryptionType reads 1 for both. XBLA/arcade titles
+commonly ship with the devkit key (found on Dead Rising 2: Case Zero, title
+58410A8D, which is why this exists).
+
+Xex2LoadImage hardcoded Xex2RetailKey, so a devkit-key title failed the first
+compressed block's SHA-1 and returned a default-constructed Image -- base 0,
+size 0, zero sections -- with no diagnostic anywhere. Every call site treats
+that as success, so it surfaces as a segfault or an empty output directory and
+reads like a bad TOML rather than a wrong key.
+
+Refactor the decrypt-and-decompress body into a lambda parameterised by key,
+returning null on failure, and try retail then devkit. Retail-key titles take
+exactly the same path as before.
+
+Also validate that the resulting image starts with "MZ". The NONE and BASIC
+compression paths have no checksum of their own, so without this a wrong key
+there would produce a garbage image and no error at all; this is the check that
+makes the fallback safe for them and not just for the LZX path.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ XenonUtils/xex.cpp | 202 ++++++++++++++++++++++++++-------------------
+ XenonUtils/xex.h   |   5 ++
+ 2 files changed, 121 insertions(+), 86 deletions(-)
+
+diff --git a/XenonUtils/xex.cpp b/XenonUtils/xex.cpp
+index 4e79042..0ec7116 100644
+--- a/XenonUtils/xex.cpp
++++ b/XenonUtils/xex.cpp
+@@ -139,122 +139,152 @@ Image Xex2LoadImage(const uint8_t* data, size_t dataSize)
+     {
+         assert(fileFormatInfo->compressionType <= XEX_COMPRESSION_NORMAL);
+ 
+-        std::unique_ptr<uint8_t[]> decryptedData;
+-        const uint8_t* srcData = nullptr;
+-
+-        if (fileFormatInfo->encryptionType == XEX_ENCRYPTION_NORMAL)
++        // Decrypt (if encrypted) and decompress with one candidate AES key, returning
++        // null if that key is not the right one. `encryptionType == XEX_ENCRYPTION_NORMAL`
++        // does NOT say *which* key: retail titles use Xex2RetailKey, XBLA/arcade titles
++        // are routinely built with the all-zero devkit key, and the header carries no
++        // discriminator. So the caller below tries both, exactly as Xenia does. Without
++        // this, a devkit-key title fails the first block's SHA-1 and Xex2LoadImage
++        // returns an empty Image with no diagnostic (found on Dead Rising 2: Case Zero,
++        // title 58410A8D).
++        auto tryKey = [&](const uint8_t* aesKey) -> std::unique_ptr<uint8_t[]>
+         {
+-            constexpr uint32_t KeySize = 16;
+-            AES_ctx aesContext;
++            std::unique_ptr<uint8_t[]> decryptedData;
++            std::unique_ptr<uint8_t[]> out;
++            const uint8_t* srcData = nullptr;
++            size_t outSize = security->imageSize;
+ 
+-            uint8_t decryptedKey[KeySize];
+-            memcpy(decryptedKey, security->aesKey, KeySize);
+-            AES_init_ctx_iv(&aesContext, Xex2RetailKey, AESBlankIV);
+-            AES_CBC_decrypt_buffer(&aesContext, decryptedKey, KeySize);
++            if (fileFormatInfo->encryptionType == XEX_ENCRYPTION_NORMAL)
++            {
++                constexpr uint32_t KeySize = 16;
++                AES_ctx aesContext;
+ 
+-            decryptedData = std::make_unique<uint8_t[]>(dataSize - header->headerSize);
+-            memcpy(decryptedData.get(), data + header->headerSize, dataSize - header->headerSize);
+-            AES_init_ctx_iv(&aesContext, decryptedKey, AESBlankIV);
+-            AES_CBC_decrypt_buffer(&aesContext, decryptedData.get(), dataSize - header->headerSize);
++                uint8_t decryptedKey[KeySize];
++                memcpy(decryptedKey, security->aesKey, KeySize);
++                AES_init_ctx_iv(&aesContext, aesKey, AESBlankIV);
++                AES_CBC_decrypt_buffer(&aesContext, decryptedKey, KeySize);
+ 
+-            srcData = decryptedData.get();
+-        }
+-        else
+-        {
+-            srcData = data + header->headerSize;
+-        }
++                decryptedData = std::make_unique<uint8_t[]>(dataSize - header->headerSize);
++                memcpy(decryptedData.get(), data + header->headerSize, dataSize - header->headerSize);
++                AES_init_ctx_iv(&aesContext, decryptedKey, AESBlankIV);
++                AES_CBC_decrypt_buffer(&aesContext, decryptedData.get(), dataSize - header->headerSize);
+ 
+-        if (fileFormatInfo->compressionType == XEX_COMPRESSION_NONE)
+-        {
+-            result = std::make_unique<uint8_t[]>(imageSize);
+-            memcpy(result.get(), srcData, imageSize);
+-        }
+-        else if (fileFormatInfo->compressionType == XEX_COMPRESSION_BASIC)
+-        {
+-            auto* blocks = reinterpret_cast<const Xex2FileBasicCompressionBlock*>(fileFormatInfo + 1);
+-            const size_t numBlocks = (fileFormatInfo->infoSize / sizeof(Xex2FileBasicCompressionInfo)) - 1;
++                srcData = decryptedData.get();
++            }
++            else
++            {
++                srcData = data + header->headerSize;
++            }
+ 
+-            imageSize = 0;
+-            for (size_t i = 0; i < numBlocks; i++)
++            if (fileFormatInfo->compressionType == XEX_COMPRESSION_NONE)
+             {
+-                imageSize += blocks[i].dataSize + blocks[i].zeroSize;
++                out = std::make_unique<uint8_t[]>(outSize);
++                memcpy(out.get(), srcData, outSize);
+             }
++            else if (fileFormatInfo->compressionType == XEX_COMPRESSION_BASIC)
++            {
++                auto* blocks = reinterpret_cast<const Xex2FileBasicCompressionBlock*>(fileFormatInfo + 1);
++                const size_t numBlocks = (fileFormatInfo->infoSize / sizeof(Xex2FileBasicCompressionInfo)) - 1;
+ 
+-            result = std::make_unique<uint8_t[]>(imageSize);
+-            auto* destData = result.get();
++                outSize = 0;
++                for (size_t i = 0; i < numBlocks; i++)
++                {
++                    outSize += blocks[i].dataSize + blocks[i].zeroSize;
++                }
+ 
+-            for (size_t i = 0; i < numBlocks; i++)
+-            {
+-                memcpy(destData, srcData, blocks[i].dataSize);
++                out = std::make_unique<uint8_t[]>(outSize);
++                auto* destData = out.get();
+ 
+-                srcData += blocks[i].dataSize;
+-                destData += blocks[i].dataSize;
++                for (size_t i = 0; i < numBlocks; i++)
++                {
++                    memcpy(destData, srcData, blocks[i].dataSize);
+ 
+-                memset(destData, 0, blocks[i].zeroSize);
+-                destData += blocks[i].zeroSize;
++                    srcData += blocks[i].dataSize;
++                    destData += blocks[i].dataSize;
++
++                    memset(destData, 0, blocks[i].zeroSize);
++                    destData += blocks[i].zeroSize;
++                }
+             }
+-        }
+-        else if (fileFormatInfo->compressionType == XEX_COMPRESSION_NORMAL)
+-        {
+-            result = std::make_unique<uint8_t[]>(imageSize);
+-            auto* destData = result.get();
++            else if (fileFormatInfo->compressionType == XEX_COMPRESSION_NORMAL)
++            {
++                out = std::make_unique<uint8_t[]>(outSize);
++                auto* destData = out.get();
+ 
+-            const Xex2CompressedBlockInfo* blocks = &((const Xex2FileNormalCompressionInfo*)(fileFormatInfo + 1))->firstBlock;
+-            const uint32_t headerSize = header->headerSize.get();
++                const Xex2CompressedBlockInfo* blocks = &((const Xex2FileNormalCompressionInfo*)(fileFormatInfo + 1))->firstBlock;
++                const uint32_t headerSize = header->headerSize.get();
+ 
+-            const uint32_t exeLength = dataSize - headerSize;
+-            const uint8_t* exeBuffer = srcData;
++                const uint32_t exeLength = dataSize - headerSize;
++                const uint8_t* exeBuffer = srcData;
+ 
+-            auto compressBuffer = std::make_unique<uint8_t[]>(exeLength);
+-            const uint8_t* p = NULL;
+-            uint8_t* d = NULL;
+-            sha1::SHA1 s;
++                auto compressBuffer = std::make_unique<uint8_t[]>(exeLength);
++                const uint8_t* p = NULL;
++                uint8_t* d = NULL;
++                sha1::SHA1 s;
+ 
+-            p = exeBuffer;
+-            d = compressBuffer.get();
++                p = exeBuffer;
++                d = compressBuffer.get();
+ 
+-            uint8_t blockCalcedDigest[0x14];
+-            while (blocks->blockSize) 
+-            {
+-                const uint8_t* pNext = p + blocks->blockSize;
+-                const auto* nextBlock = (const Xex2CompressedBlockInfo*)p;
++                uint8_t blockCalcedDigest[0x14];
++                while (blocks->blockSize)
++                {
++                    const uint8_t* pNext = p + blocks->blockSize;
++                    const auto* nextBlock = (const Xex2CompressedBlockInfo*)p;
+ 
+-                s.reset();
+-                s.processBytes(p, blocks->blockSize);
+-                s.finalize(blockCalcedDigest);
++                    s.reset();
++                    s.processBytes(p, blocks->blockSize);
++                    s.finalize(blockCalcedDigest);
+ 
+-                if (memcmp(blockCalcedDigest, blocks->blockHash, 0x14) != 0)
+-                    return {};
++                    // Wrong key => the "block" is noise and this is where it shows up.
++                    if (memcmp(blockCalcedDigest, blocks->blockHash, 0x14) != 0)
++                        return nullptr;
+ 
+-                p += 4;
+-                p += 20;
++                    p += 4;
++                    p += 20;
+ 
+-                while (true) 
+-                {
+-                    const size_t chunkSize = (p[0] << 8) | p[1];
+-                    p += 2;
++                    while (true)
++                    {
++                        const size_t chunkSize = (p[0] << 8) | p[1];
++                        p += 2;
++
++                        if (!chunkSize)
++                            break;
+ 
+-                    if (!chunkSize)
+-                        break;
++                        memcpy(d, p, chunkSize);
++                        p += chunkSize;
++                        d += chunkSize;
++                    }
+ 
+-                    memcpy(d, p, chunkSize);
+-                    p += chunkSize;
+-                    d += chunkSize;
++                    p = pNext;
++                    blocks = nextBlock;
+                 }
+ 
+-                p = pNext;
+-                blocks = nextBlock;
++                int resultCode = 0;
++                uint32_t uncompressedSize = security->imageSize;
++                uint8_t* buffer = destData;
++
++                resultCode = lzxDecompress(compressBuffer.get(), d - compressBuffer.get(), buffer, uncompressedSize, ((const Xex2FileNormalCompressionInfo*)(fileFormatInfo + 1))->windowSize, nullptr, 0);
++
++                if (resultCode)
++                    return nullptr;
+             }
+ 
+-            int resultCode = 0;
+-            uint32_t uncompressedSize = security->imageSize;
+-            uint8_t* buffer = destData;
++            // The uncompressed image is a PE; if it does not start with "MZ" the key was
++            // wrong. NONE/BASIC compression has no checksum of its own, so this is the
++            // only validation those paths get — and it is the same check Xenia uses.
++            if (!out || outSize < 2 || out[0] != 'M' || out[1] != 'Z')
++                return nullptr;
+ 
+-            resultCode = lzxDecompress(compressBuffer.get(), d - compressBuffer.get(), buffer, uncompressedSize, ((const Xex2FileNormalCompressionInfo*)(fileFormatInfo + 1))->windowSize, nullptr, 0);
++            imageSize = outSize;
++            return out;
++        };
+ 
+-            if (resultCode)
+-                return {};
+-        }
++        result = tryKey(Xex2RetailKey);
++        if (result == nullptr)
++            result = tryKey(Xex2DevkitKey);
++
++        if (result == nullptr)
++            return {};
+     }
+ 
+     image.data = std::move(result);
+diff --git a/XenonUtils/xex.h b/XenonUtils/xex.h
+index 363efff..71cd011 100644
+--- a/XenonUtils/xex.h
++++ b/XenonUtils/xex.h
+@@ -3,6 +3,11 @@
+ #include "xbox.h"
+ 
+ inline constexpr uint8_t Xex2RetailKey[16] = { 0x20, 0xB1, 0x85, 0xA5, 0x9D, 0x28, 0xFD, 0xC3, 0x40, 0x58, 0x3F, 0xBB, 0x08, 0x96, 0xBF, 0x91 };
++// The "devkit" key is all zeroes. XBLA / arcade packages are commonly encrypted with it
++// even though their encryptionType field reads XEX_ENCRYPTION_NORMAL exactly like a
++// retail-key title's does; nothing in the header distinguishes them, so the loader has
++// to try both (see Xex2LoadImage).
++inline constexpr uint8_t Xex2DevkitKey[16] = {};
+ inline constexpr uint8_t AESBlankIV[16] = {};
+ 
+ enum Xex2ModuleFlags
+-- 
+2.55.0
+

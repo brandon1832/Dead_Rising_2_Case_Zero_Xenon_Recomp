@@ -1,0 +1,74 @@
+From 884c605eab255db3c69ee3a6b1e8c6d316cf52bc Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Wed, 15 Jul 2026 00:49:36 -0400
+Subject: [PATCH 02/14] Implement VUPKD3D128 FLOAT16_2 (type 3) and FLOAT16_4
+ (type 5)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Both previously fell through to __builtin_debugtrap(), which Fable 2 hits on its
+frontend/save-game path (68 sites: 59x FLOAT16_4, 9x FLOAT16_2).
+
+Lane conventions cross-checked two ways: against Xenia's x64 lowering
+(XMMUnpackFLOAT16_4/2 shuffle constants) and against this recompiler's own
+shipped SHORT_2 unpack — both agree that under the reversed vector storage
+FLOAT16_4 is the identity mapping f32[i] = half(u16[i]), and FLOAT16_2 follows
+the SHORT_2 lane pattern (u16[1-i] -> f32[3-i], then z=0, w=1).
+
+The emitted half->float conversion (bit-manipulation + an exact denormal patch
+via mant * 2^-24, which produces a normal f32 so host FTZ can't hurt it) was
+verified exhaustively: all 65536 half bit patterns bit-exact against hardware
+F16C (vcvtph2ps).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ XenonRecomp/recompiler.cpp | 32 ++++++++++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
+index 0e351b8..128164f 100644
+--- a/XenonRecomp/recompiler.cpp
++++ b/XenonRecomp/recompiler.cpp
+@@ -2215,6 +2215,38 @@ bool Recompiler::Recompile(
+             println("\t{} = {};", v(insn.operands[0]), vTemp());
+             break;
+ 
++        case 3: // float16_2: (x, y, 0, 1), same lane pattern as the 2-shorts case.
++            if ((insn.operands[2] & 0x3) != 0)
++                fmt::println("Unexpected float16_2 unpack shift at {:X}", base);
++
++            for (size_t i = 0; i < 2; i++)
++            {
++                println("\t{}.u32 = {}.u16[{}];", temp(), v(insn.operands[1]), 1 - i);
++                println("\t{0}.u32[{1}] = (({2}.u32 & 0x8000) << 16) | (({2}.u32 & 0x7C00) == 0x7C00 ? (0x7F800000 | (({2}.u32 & 0x3FF) << 13)) : (({2}.u32 & 0x7C00) == 0 ? 0 : ((((({2}.u32 >> 10) & 0x1F) + 112) << 23) | (({2}.u32 & 0x3FF) << 13))));", vTemp(), 3 - i, temp());
++                // Half-precision denormals become small *normal* floats (mant * 2^-24);
++                // the bit path above would flush them, so patch them in exactly.
++                println("\tif (({0}.u32 & 0x7C00) == 0 && ({0}.u32 & 0x3FF) != 0) {1}.f32[{2}] = (({0}.u32 & 0x8000) ? -5.9604644775390625e-8f : 5.9604644775390625e-8f) * float(int32_t({0}.u32 & 0x3FF));", temp(), vTemp(), 3 - i);
++            }
++            println("\t{}.f32[1] = 0.0f;", vTemp());
++            println("\t{}.f32[0] = 1.0f;", vTemp());
++            println("\t{} = {};", v(insn.operands[0]), vTemp());
++            break;
++
++        case 5: // float16_4: the inverse of VPKD3D128 float16_4 with a zero shift —
++                // under the reversed vector storage the lane mapping is the identity:
++                // f32[i] = half(u16[i]).
++            if ((insn.operands[2] & 0x3) != 0)
++                fmt::println("Unexpected float16_4 unpack shift at {:X}", base);
++
++            for (size_t i = 0; i < 4; i++)
++            {
++                println("\t{}.u32 = {}.u16[{}];", temp(), v(insn.operands[1]), i);
++                println("\t{0}.u32[{1}] = (({2}.u32 & 0x8000) << 16) | (({2}.u32 & 0x7C00) == 0x7C00 ? (0x7F800000 | (({2}.u32 & 0x3FF) << 13)) : (({2}.u32 & 0x7C00) == 0 ? 0 : ((((({2}.u32 >> 10) & 0x1F) + 112) << 23) | (({2}.u32 & 0x3FF) << 13))));", vTemp(), i, temp());
++                println("\tif (({0}.u32 & 0x7C00) == 0 && ({0}.u32 & 0x3FF) != 0) {1}.f32[{2}] = (({0}.u32 & 0x8000) ? -5.9604644775390625e-8f : 5.9604644775390625e-8f) * float(int32_t({0}.u32 & 0x3FF));", temp(), vTemp(), i);
++            }
++            println("\t{} = {};", v(insn.operands[0]), vTemp());
++            break;
++
+         default:
+             println("\t__builtin_debugtrap();");
+             break;
+-- 
+2.55.0
+

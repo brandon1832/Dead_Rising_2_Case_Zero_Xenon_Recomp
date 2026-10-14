@@ -1,0 +1,129 @@
+From d4851fbde466122a1e328f992b612fed1919af77 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Wed, 19 Aug 2026 19:43:23 -0400
+Subject: [PATCH 23/23] =?UTF-8?q?vs:=20XE=5FUSER=5FCLIP=5FPLANES=20?=
+ =?UTF-8?q?=E2=80=94=20export=20six=20user=20clip=20planes=20as=20ClipDist?=
+ =?UTF-8?q?ance?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Xenos clips against up to six PA_CL_UCP planes right after the VS; Vulkan
+clips only against ClipDistance the shader exports, so the translated VS must
+compute the dots itself. A shared gap: ClipDistance appeared nowhere in the
+Case Zero renderer or Fable 2's, and Dead Rising 2 Case Zero draws a sliced
+zombie as the whole body TWICE, each copy clipped to one side of the cut —
+with no planes both copies render whole.
+
+Guarded in the EMITTED TEXT (#ifdef XE_USER_CLIP_PLANES), so a cache built
+without the define is byte-identical — the same null-control property
+XE_ALPHA_TO_MASK has. The outputs are zero-initialised (zero = KEPT) so a
+path that never reaches the position export cannot leave them undefined, and
+the dots use the RAW exported clip position, above the g_PosScale window->NDC
+fold. Plane equations read from SharedConstants+2080 (after the vfetch table).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ XenosRecomp/shader_common.h       | 24 +++++++++++++++++++++++-
+ XenosRecomp/shader_recompiler.cpp | 29 +++++++++++++++++++++++++++++
+ 2 files changed, 52 insertions(+), 1 deletion(-)
+
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index df060e5..f9cb1d4 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -59,6 +59,12 @@ struct PushConstants
+ // transform is enabled); 1D descriptor indices occupy 288..351.
+ #define g_PosScale                 vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 352)
+ #define g_PosOffset                vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 360)
++// USER CLIP PLANES (Case Zero part 57). Six float4 plane equations at +2080, after the
++// dependent-vfetch table (544 + 96*16 = 2080). The runtime writes only the planes
++// PA_CL_CLIP_CNTL enables for the draw; the block is zeroed per draw and a zero plane
++// dots to 0, which Vulkan keeps — so an unwritten plane can never clip. Read only by
++// the XE_USER_CLIP_PLANES epilogue (a second-cache arm until proven).
++#define g_ClipPlane(n)             vk::RawBufferLoad<float4>(g_PushConstants.SharedConstants + 2080 + 16 * (n))
+ 
+ // Fable2 DEPENDENT VERTEX FETCH (docs/world-era-fatal-and-selector.md §3z).
+ //
+@@ -424,7 +430,23 @@ float XeAlphaTestThreshold(float2 pos)
+ // g_AlphaToMask only exists on the SPIR-V path (the DX path's shared constants are a
+ // packoffset cbuffer with no free slot declared for it), so the arm is guarded on both.
+ #if defined(XE_ALPHA_TO_MASK) && defined(__spirv__)
+-    if (g_AlphaToMask != 0)
++    // The host publishes a MODE, not a flag, because the right emulation depends on
++    // whether the host's render target actually has a sample grid under it.
++    //
++    //   1 = FLAT. One threshold at 0.5 for every pixel. No sample grid needed. It gives
++    //       up the soft edge but lands the SILHOUETTE where hardware's resolve puts it,
++    //       because a coverage mask averaged over the resolve crosses 50% at alpha 0.5.
++    //   2 = DITHER. The true per-sample coverage, as a 2x2 ordered pattern. Correct
++    //       ONLY where one host pixel is one guest SAMPLE; anywhere else it lands at
++    //       pixel granularity and reads as a screen door.
++    //
++    // Case Zero measured both on its foliage: mode 2 removes the hard black plates but
++    // takes isolated-pixel share from 0.14% to 5.59% (hardware: ~0%), which the operator
++    // saw immediately as "a different kind of issue". Mode 1 exists because that trade
++    // is not obviously worth making on a host without sample-resolution resolves.
++    if (g_AlphaToMask == 1u)
++        return max(g_AlphaThreshold, 0.5);
++    if (g_AlphaToMask >= 2u)
+     {
+         uint2 s = uint2(pos) & 1u;
+         // Bayer order over the 2x2 quad: 0 2 / 3 1.
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 35f726b..cb072f4 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -1830,6 +1830,17 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+         for (auto& [usage, usageIndex] : INTERPOLATORS)
+             print(",\n\tout float4 o{0}{1} : {2}{1}", USAGE_VARIABLES[uint32_t(usage)], usageIndex, USAGE_SEMANTICS[uint32_t(usage)]);
++
++        // USER CLIP PLANES (Case Zero part 57, and a shared gap: no ClipDistance
++        // appeared anywhere in either port's renderer). Xenos clips against up to six
++        // PA_CL_UCP planes right after the VS; Vulkan clips only against ClipDistance
++        // the shader exports, so the translated VS must compute the six dots itself.
++        // Guarded in the EMITTED TEXT so a cache built without the define is
++        // byte-identical — the same null-control property XE_ALPHA_TO_MASK has.
++        out += "\n#ifdef XE_USER_CLIP_PLANES\n"
++               "\t, out float4 oClipA : SV_ClipDistance0\n"
++               "\t, out float2 oClipB : SV_ClipDistance1\n"
++               "#endif\n";
+     }
+ 
+     out += ")\n";
+@@ -1966,6 +1977,15 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         for (auto& [usage, usageIndex] : INTERPOLATORS)
+             println("\to{}{} = 0.0;", USAGE_VARIABLES[uint32_t(usage)], usageIndex);
+ 
++        // Zero, i.e. KEPT: Vulkan discards only where a clip distance is NEGATIVE, so a
++        // path that never reaches the position-export epilogue (and therefore never
++        // computes the dots) must not leave the outputs undefined — undefined here is
++        // random clipping of whole triangles.
++        out += "#ifdef XE_USER_CLIP_PLANES\n"
++               "\toClipA = 0.0;\n"
++               "\toClipB = 0.0;\n"
++               "#endif\n";
++
+         out += "\n";
+     }
+ 
+@@ -2471,6 +2491,15 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                     if (!hasMtxProjection)
+                 #endif
+                     {
++                        // The dots use the RAW exported clip position — hardware clips
++                        // against exactly what the VS exported, BEFORE any window->NDC
++                        // fold — so they are emitted above the g_PosScale lines, whose
++                        // adjustment of oPos.xy would otherwise leak into planes with
++                        // x/y components.
++                        out += "#ifdef XE_USER_CLIP_PLANES\n"
++                               "\toClipA = float4(dot(oPos, g_ClipPlane(0)), dot(oPos, g_ClipPlane(1)), dot(oPos, g_ClipPlane(2)), dot(oPos, g_ClipPlane(3)));\n"
++                               "\toClipB = float2(dot(oPos, g_ClipPlane(4)), dot(oPos, g_ClipPlane(5)));\n"
++                               "#endif\n";
+                         out += "\toPos.xy = oPos.xy * g_PosScale + g_PosOffset * oPos.w;\n";
+                         out += "\toPos.xy += g_HalfPixelOffset * oPos.w;\n";
+                     }
+-- 
+2.55.0
+

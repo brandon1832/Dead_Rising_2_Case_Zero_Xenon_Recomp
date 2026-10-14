@@ -1,0 +1,124 @@
+From 65a9fdf357cef733b0804fb4164ae066dd96cf45 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Wed, 15 Jul 2026 01:01:46 -0400
+Subject: [PATCH 01/23] Portability: replace MSVC anonymous union/struct
+ extensions for GCC
+
+Three sites in shader_recompiler.cpp used anonymous structs inside anonymous
+unions at block scope (MSVC extension): the int4-definition byte unpack, the
+control-flow dword pun, and the instruction-code pun. Rewritten as named
+members / explicit locals; behaviour identical.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ XenosRecomp/shader_recompiler.cpp | 62 +++++++++++++------------------
+ 1 file changed, 26 insertions(+), 36 deletions(-)
+
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 698a418..7a5ce53 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -1394,19 +1394,12 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+             auto definition = reinterpret_cast<const Int4Definition*>(definitions);
+             for (uint16_t i = 0; i < definition->count; i++)
+             {
+-                union
+-                {
+-                    uint32_t value;
+-                    struct
+-                    {
+-                        int8_t x;
+-                        int8_t y;
+-                        int8_t z;
+-                        int8_t w;
+-                    };
+-                };
+-
+-                value = definition->values[i].get();
++                // (was an MSVC anonymous union/struct; GCC rejects it)
++                const uint32_t value = definition->values[i].get();
++                const int8_t x = int8_t(value & 0xFF);
++                const int8_t y = int8_t((value >> 8) & 0xFF);
++                const int8_t z = int8_t((value >> 16) & 0xFF);
++                const int8_t w = int8_t((value >> 24) & 0xFF);
+ 
+                 println("\tint4 i{} = int4({}, {}, {}, {});",
+                     (definition->registerIndex - 8992) / 4 + i, x, y, z, w);
+@@ -1493,17 +1486,13 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+     const be<uint32_t>* code = reinterpret_cast<const be<uint32_t>*>(shaderData + shaderContainer->virtualSize + shader->physicalOffset);
+ 
+-    union
+-    {
+-        ControlFlowInstruction controlFlow[2];
+-        struct
+-        {
+-            uint32_t code0;
+-            uint32_t code1;
+-            uint32_t code2;
+-            uint32_t code3;
+-        };
+-    };
++    // (was an MSVC anonymous union/struct; GCC rejects it)
++    ControlFlowInstruction controlFlow[2];
++    uint32_t codes[4];
++    uint32_t& code0 = codes[0];
++    uint32_t& code1 = codes[1];
++    uint32_t& code2 = codes[2];
++    uint32_t& code3 = codes[3];
+ 
+     auto controlFlowCode = code;
+     uint32_t instrAddress = 0;
+@@ -1516,6 +1505,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         code1 = controlFlowCode[1] & 0xFFFF;
+         code2 = (controlFlowCode[1] >> 16) | (controlFlowCode[2] << 16);
+         code3 = controlFlowCode[2] >> 16;
++        memcpy(controlFlow, codes, sizeof(controlFlow));
+ 
+         for (auto& cfInstr : controlFlow)
+         {
+@@ -1583,6 +1573,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         code1 = controlFlowCode[1] & 0xFFFF;
+         code2 = (controlFlowCode[1] >> 16) | (controlFlowCode[2] << 16);
+         code3 = controlFlowCode[2] >> 16;
++        memcpy(controlFlow, codes, sizeof(controlFlow));
+ 
+         for (auto& cfInstr : controlFlow)
+         {
+@@ -1723,22 +1714,21 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+             
+             for (uint32_t i = 0; i < count; i++)
+             {
+-                union
++                // (was an MSVC anonymous union/struct; GCC rejects it)
++                union InstrUnion
+                 {
+                     VertexFetchInstruction vertexFetch;
+                     TextureFetchInstruction textureFetch;
+                     AluInstruction alu;
+-                    struct
+-                    {
+-                        uint32_t code0;
+-                        uint32_t code1;
+-                        uint32_t code2;
+-                    };
+-                };
+-            
+-                code0 = instructionCode[0];
+-                code1 = instructionCode[1];
+-                code2 = instructionCode[2];
++                    uint32_t codes[3];
++                } u;
++                auto& vertexFetch = u.vertexFetch;
++                auto& textureFetch = u.textureFetch;
++                auto& alu = u.alu;
++
++                u.codes[0] = instructionCode[0];
++                u.codes[1] = instructionCode[1];
++                u.codes[2] = instructionCode[2];
+             
+                 if ((sequence & 0x1) != 0)
+                 {
+-- 
+2.55.0
+

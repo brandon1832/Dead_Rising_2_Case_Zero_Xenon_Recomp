@@ -1,0 +1,132 @@
+From 3816f9627ab07d5dd3ef910c95638e75449c23f5 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Sun, 19 Jul 2026 21:34:30 -0400
+Subject: [PATCH 06/23] Bind Xenos loop constants: declare i0..i31 from the
+ shared constant block
+
+A shader may reference an integer/loop register the container's definition table
+does not declare, because the trip count is set at run time through the guest's
+loop-constant registers (0x4908 + n) rather than baked into the container.
+Sonic Unleashed never did this; Fable 2's PSHADER_POSTPROCESSING_GAUSSBLUR loops
+g_SamplesCount times, so its definition table holds no int4 at all and every
+reference to i16 came out of the recompiler undeclared -- the HLSL then failed
+to compile ("use of undeclared identifier 'i16'") and the pass was dropped.
+
+Declare every int4 the definition table does not, reading it from a new
+384..511 window of SharedConstants via LoopConstant(n). The guest packs each
+loop constant as count/start/step in the low three bytes, the same layout the
+definition-table path already unpacks. Unused declarations are dead code.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ XenosRecomp/shader_common.h       | 16 +++++++++++++++-
+ XenosRecomp/shader_recompiler.cpp | 31 +++++++++++++++++++++++++++----
+ 2 files changed, 42 insertions(+), 5 deletions(-)
+
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index 7c76745..fb2e7e3 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -34,6 +34,14 @@ struct PushConstants
+ // transform is enabled); 1D descriptor indices occupy 288..351.
+ #define g_PosScale                 vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 352)
+ #define g_PosOffset                vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 360)
++// Fable2: the guest's 32 Xenos loop constants (registers 0x4908 + n) at 384..511.
++// Each is packed count/start/step in its low three bytes; a shader that loops a
++// run-time number of times (g_SamplesCount in the gauss-blur post pass) reads its
++// trip count from here rather than from the container's definition table.
++#define g_LoopConstantRaw(n)       vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 384 + 4 * (n))
++#define LoopConstant(n)            int4(int(g_LoopConstantRaw(n) & 0xFF), \
++                                        int((g_LoopConstantRaw(n) >> 8) & 0xFF), \
++                                        int((g_LoopConstantRaw(n) >> 16) & 0xFF), 0)
+ 
+ [[vk::constant_id(0)]] const uint g_SpecConstants = 0;
+ 
+@@ -47,7 +55,13 @@ struct PushConstants
+     float2 g_HalfPixelOffset : packoffset(c16.z); \
+     float g_AlphaThreshold : packoffset(c17.x); \
+     float2 g_PosScale : packoffset(c22.x); \
+-    float2 g_PosOffset : packoffset(c22.z);
++    float2 g_PosOffset : packoffset(c22.z); \
++    uint4 g_LoopConstants[8] : packoffset(c24);
++
++// Same 384..511 window as the SPIR-V path, addressed as 8 uint4s.
++#define LoopConstant(n) int4(int((g_LoopConstants[(n) / 4][(n) % 4]) & 0xFF), \
++                             int((g_LoopConstants[(n) / 4][(n) % 4] >> 8) & 0xFF), \
++                             int((g_LoopConstants[(n) / 4][(n) % 4] >> 16) & 0xFF), 0)
+ 
+ uint g_SpecConstants();
+ 
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 62fc57f..6f13837 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -1153,7 +1153,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+             if (constantInfo->registerCount > 1)
+             {
+-                uint32_t tailCount = (isPixelShader ? 224 : 256) - constantInfo->registerIndex;
++                uint32_t tailCount = 256 - constantInfo->registerIndex; // Xenos has 256 PS float constants too (Fable2 YUV matrix lives at 253-255)
+ 
+                 println("#define {}(INDEX) select((INDEX) < {}, vk::RawBufferLoad<float4>(g_PushConstants.{}ShaderConstants + ({} + min(INDEX, {})) * 16, 0x10), 0.0)",
+                     constantName, tailCount, shaderName, constantInfo->registerIndex.get(), tailCount - 1);
+@@ -1211,7 +1211,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+             if (constantInfo->registerCount > 1)
+             {
+-                uint32_t tailCount = (isPixelShader ? 224 : 256) - constantInfo->registerIndex;
++                uint32_t tailCount = 256 - constantInfo->registerIndex; // Xenos has 256 PS float constants too (Fable2 YUV matrix lives at 253-255)
+                 println("#define {0}(INDEX) select((INDEX) < {1}, {0}[min(INDEX, {2})], 0.0)", constantName, tailCount, tailCount - 1);
+             }
+         }
+@@ -1372,6 +1372,15 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     }
+ #endif
+ 
++    // Loop/integer registers (i0..i31) that the container's definition table
++    // declares are compile-time constants; any OTHER loop register a shader
++    // references is set at run time through the Xenos loop-constant registers
++    // (0x4908 + n), and must be read from the shared constant block instead.
++    // Fable2's PSHADER_POSTPROCESSING_GAUSSBLUR is exactly that case: its sample
++    // count is the game-set g_SamplesCount, so its definition table declares no
++    // int4 at all and every reference to i16 came out undeclared.
++    bool definedInt4[32]{};
++
+     if (shaderContainer->definitionTableOffset != NULL)
+     {
+         auto definitionTable = reinterpret_cast<const DefinitionTable*>(shaderData + shaderContainer->definitionTableOffset);
+@@ -1402,8 +1411,10 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                 const int8_t z = int8_t((value >> 16) & 0xFF);
+                 const int8_t w = int8_t((value >> 24) & 0xFF);
+ 
+-                println("\tint4 i{} = int4({}, {}, {}, {});",
+-                    (definition->registerIndex - 8992) / 4 + i, x, y, z, w);
++                const uint32_t reg = (definition->registerIndex - 8992) / 4 + i;
++                if (reg < 32)
++                    definedInt4[reg] = true;
++                println("\tint4 i{} = int4({}, {}, {}, {});", reg, x, y, z, w);
+             }
+             definitions += 2;
+             definitions += definition->count;
+@@ -1412,6 +1423,18 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         out += "\n";
+     }
+ 
++    // The rest come from the guest's loop-constant registers. Declaring all 32
++    // unconditionally keeps this independent of a control-flow pre-scan; the
++    // unused ones are dead code that the compiler drops. The guest packs each
++    // loop constant as count/start/step in the low three bytes, which is the
++    // same byte layout the definition-table path above unpacks.
++    for (uint32_t reg = 0; reg < 32; reg++)
++    {
++        if (!definedInt4[reg])
++            println("\tint4 i{0} = LoopConstant({0});", reg);
++    }
++    out += "\n";
++
+     bool printedRegisters[32]{};
+ 
+     uint32_t interpolatorCount = (shader->interpolatorInfo >> 5) & 0x1F;
+-- 
+2.55.0
+

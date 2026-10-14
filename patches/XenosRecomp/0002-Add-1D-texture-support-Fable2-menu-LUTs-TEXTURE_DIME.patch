@@ -1,0 +1,53 @@
+From a27a5e141ccb890629b966a58bf0e749fb204414 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Thu, 16 Jul 2026 01:12:08 -0400
+Subject: [PATCH 02/23] Add 1D texture support (Fable2 menu LUTs):
+ TEXTURE_DIMENSIONS entry + Texture1D heap (space3) + tfetch1D helper
+
+---
+ XenosRecomp/shader_common.h       | 7 +++++++
+ XenosRecomp/shader_recompiler.cpp | 3 ++-
+ 2 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index 1c74034..896b2eb 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -50,6 +50,7 @@ uint g_SpecConstants();
+ Texture2D<float4> g_Texture2DDescriptorHeap[] : register(t0, space0);
+ Texture3D<float4> g_Texture3DDescriptorHeap[] : register(t0, space1);
+ TextureCube<float4> g_TextureCubeDescriptorHeap[] : register(t0, space2);
++Texture1D<float4> g_Texture1DDescriptorHeap[] : register(t0, space3); // Fable2: menu LUTs
+ SamplerState g_SamplerDescriptorHeap[] : register(s0, space3);
+ 
+ uint2 getTexture2DDimensions(Texture2D<float4> texture)
+@@ -59,6 +60,12 @@ uint2 getTexture2DDimensions(Texture2D<float4> texture)
+     return dimensions;
+ }
+ 
++float4 tfetch1D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float texCoord)
++{
++    Texture1D<float4> texture = g_Texture1DDescriptorHeap[resourceDescriptorIndex];
++    return texture.Sample(g_SamplerDescriptorHeap[samplerDescriptorIndex], texCoord);
++}
++
+ float4 tfetch2D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float2 texCoord, float2 offset)
+ {
+     Texture2D<float4> texture = g_Texture2DDescriptorHeap[resourceDescriptorIndex];
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 7a5ce53..a770792 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -122,7 +122,8 @@ static constexpr std::string_view TEXTURE_DIMENSIONS[] =
+ {
+     "2D",
+     "3D", 
+-    "Cube" 
++    "Cube",
++    "1D" // Fable2: menu LUT lookups tfetch1D; absent in Sonic Unleashed
+ };
+ 
+ static FetchDestinationSwizzle getDestSwizzle(uint32_t dstSwizzle, uint32_t index)
+-- 
+2.55.0
+

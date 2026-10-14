@@ -1,0 +1,70 @@
+From d276ba4d44c7efd24d0ca7b57b01a86c575d6514 Mon Sep 17 00:00:00 2001
+From: wivi514 <wivi514@hotmail.com>
+Date: Sat, 25 Jul 2026 02:54:26 -0400
+Subject: [PATCH 11/23] Add Xenos param-gen: fill a PS GPR with pixel position
+ when the VS doesn't export the interpolator
+
+Xenos scan-conversion "param gen" injects the pixel window position into a PS
+GPR when the shader reads an interpolator the vertex shader does not export
+(SQ_CONTEXT_MISC). XenosRecomp handled only the baked svPos register
+(Shader.fieldC>>8); shaders wrapped in a synthesized container (bare-ucode
+dumps) lose that field, and param-gen is really per-draw (it depends on the
+bound VS). So make it runtime-conditional:
+
+- shader_common.h: g_ParamGenMask at SharedConstants+276.
+- shader_recompiler.cpp: each PS interpolator load becomes
+    r{reg} = (g_ParamGenMask & (1u<<reg))
+           ? float4((iPos.xy-0.5)*float2(iFace?1:-1,1),0,0)
+           : i{usage}{idx};
+  Mask 0 => unchanged, so shaders whose VS provides the interpolator are
+  byte-identical in behavior.
+
+The consuming runtime sets the mask per draw for PS-read interpolators the
+bound VS doesn't export. Verified against Fable2's terrain param-gen pass
+(ps 7d64ca4c3c5ff6cd + vs 6c887cb0ddb3c3d6, which exports no interpolators):
+r0 now receives the pixel position instead of a zeroed interpolator.
+---
+ XenosRecomp/shader_common.h       | 6 ++++++
+ XenosRecomp/shader_recompiler.cpp | 9 ++++++++-
+ 2 files changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index ad27868..752e003 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -40,6 +40,12 @@ struct PushConstants
+ #define g_SwappedTexcoords         vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 260)
+ #define g_HalfPixelOffset          vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 264)
+ #define g_AlphaThreshold           vk::RawBufferLoad<float>(g_PushConstants.SharedConstants + 272)
++// Fable2 param-gen (Xenos SC-generated pixel position). Bit r set => GPR r is
++// filled with the param-gen value (pixel window position) instead of the vertex
++// interpolator, because the bound vertex shader does not export interpolator r.
++// The runtime computes this per draw (PS reads r, VS doesn't export r). Offset 276
++// is the free c17.y slot after g_AlphaThreshold, before the 1D-alias table at 288.
++#define g_ParamGenMask             vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 276)
+ // Fable2: window->NDC position transform (identity when the guest viewport
+ // transform is enabled); 1D descriptor indices occupy 288..351.
+ #define g_PosScale                 vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 352)
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 7c7b45e..cf34ced 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -1589,7 +1589,14 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         if (isPixelShader)
+         {
+             value = reinterpret_cast<const PixelShader*>(shader)->interpolators[i];
+-            println("\tfloat4 r{} = i{}{};", uint32_t(interpolator.reg), USAGE_VARIABLES[uint32_t(interpolator.usage)], uint32_t(interpolator.usageIndex));
++            // Xenos param-gen: when the bound vertex shader does not export this
++            // interpolator, the scan converter injects the pixel window position
++            // into the GPR instead. The runtime sets g_ParamGenMask bit reg for
++            // exactly those draws (mask 0 => normal interpolator, unchanged). See
++            // the svPos-register emission below for the same position expression.
++            println("\tfloat4 r{} = (g_ParamGenMask & (1u << {}u)) ? float4((iPos.xy - 0.5) * float2(iFace ? 1.0 : -1.0, 1.0), 0.0, 0.0) : i{}{};",
++                    uint32_t(interpolator.reg), uint32_t(interpolator.reg),
++                    USAGE_VARIABLES[uint32_t(interpolator.usage)], uint32_t(interpolator.usageIndex));
+             printedRegisters[interpolator.reg] = true;
+         }
+         else
+-- 
+2.55.0
+
