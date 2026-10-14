@@ -61,15 +61,9 @@ struct State
 #else
     int crowdLodX10 = 20;
 #endif
-    // WORLD DETAIL, in tenths: 10..40 step 5 (operator's spec, 2026-10-08). The scale on
-    // every static-geometry LOD switch distance; the title's own is 1.0
-    // (cpu/world_lod.cpp). 2.0 on the desktop, 1.0 — the title's own — on the Deck, for
-    // the same performance reason as ZOMBIE DETAIL.
-#ifdef CZ_DECK_DEFAULTS
+    // WORLD DETAIL, in tenths: 10..40 step 5. The title's own scale is 1.0
+    // (cpu/world_lod.cpp), now the default on every platform.
     int worldLodX10 = 10;
-#else
-    int worldLodX10 = 20;
-#endif
     // SHADOW BIAS, in hundredths: 25..100 step 25 (2026-10-10). The scale on the title's
     // per-cascade shadow depth bias; 100 is the title's own. 25 everywhere, the Deck
     // included: it changes one multiply per constant copy and costs nothing.
@@ -130,7 +124,7 @@ void SaveLocked()
             "rt_shadows=%d\n"     // 0 = OG, 1 = RT LOW (needs a ray-query device)
             "exposure_x10=%d\n"   // EXPOSURE in tenths: 10..50 step 5, 25 = 2.5
             "crowd_lod_x10=%d\n"  // ZOMBIE DETAIL in tenths: 5..50 step 5, 20 = 2.0
-            "world_lod_x10=%d\n"  // WORLD DETAIL in tenths: 10..40 step 5, 20 = 2.0
+            "world_lod_x10=%d\n"  // WORLD DETAIL in tenths: 10..40 step 5
             "shadow_bias_x100=%d\n" // SHADOW BIAS in hundredths: 25..100 step 25, 100 = OG
             "mouse_sens=%d\n"     // 1..10
             "language=%d\n"       // Xbox ID: 1=en 2=ja 4=fr 5=es 6=it 7=ko

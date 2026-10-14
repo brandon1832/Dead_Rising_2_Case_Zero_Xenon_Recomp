@@ -140,8 +140,9 @@ shipped.
 
 **The setting.** `runtime/cpu/world_lod.cpp` wraps both accessors. At a scale S != 1, the
 cutoff is raised to at least 9999 and the multiplier is the level's own times S. Range
-1.0..4.0, step 0.5. The default is 2.0, or 1.0 under `CZ_DECK_DEFAULTS`. It is stored as
-`world_lod_x10` and is the eleventh panel row. `CZ_WORLD_LOD=0` is the control.
+1.0..4.0, step 0.5. The default is 1.0 on every build, matching the original game's
+value. It is stored as `world_lod_x10` and is the eleventh panel row. `CZ_WORLD_LOD=0`
+is the control.
 
 **Open: pop/flicker at streaming boundaries.** In F8 bursts `060820`/`060920` the pawn
 lettering is absent from every frame; in `060938`, from about the same distance, it is

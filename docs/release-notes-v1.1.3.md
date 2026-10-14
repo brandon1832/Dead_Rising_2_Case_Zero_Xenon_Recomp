@@ -100,9 +100,9 @@ go to `~/Library/Application Support/Dead Rising 2 Case Zero/`.
   right next to one. Original game: 1.0; default now 2.0, up to 5.0. Higher costs more
   GPU time in big crowds. The Steam Deck build keeps 1.0.
 - **New setting: WORLD DETAIL** (Settings panel). Buildings, rooftop props and sign
-  lettering switch to their detailed version from twice as far away — the pawnshop's
-  sign, the cactus and the fire hydrant used to appear only once you were across the
-  street. Original game: 1.0; default now 2.0, up to 4.0. The Steam Deck build keeps 1.0.
+  lettering can switch to their detailed version sooner. Original game and default:
+  1.0, up to 4.0. This v1.1.3 rebuild restores 1.0 as the default on Linux, Windows
+  and macOS. The Steam Deck build already defaults to 1.0.
   Some rooftop props and sign lettering can still pop as you cross a streaming boundary;
   that also happens at 1.0, just closer to you.
 - **New setting: SHADOW BIAS** (Settings panel). Shadows of awnings and other thin
