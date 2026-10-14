@@ -8,19 +8,19 @@ any more. Everything else in `docs/` is the working record that this file points
 
 ## 1. What shipped
 
-**v1.1.3 is the last release.** Tag `v1.1.3` = `51df8c7`. Five downloads plus
+**v1.1.3 is the last release.** Tag `v1.1.3` = `b3895ad` (WORLD DETAIL default rebuild).
+Five downloads plus
 `SHA256SUMS`; `docs/release-notes-v1.1.3.md` has the text, the hashes and the gate
 record.
 
 | download | built from | how |
 |---|---|---|
-| `CaseZeroRecomp-linux-x86_64.tar.zst` / `.AppImage` | `a0e4f35` | `tools/release_build_oldbase.sh` (Ubuntu 22.04 container, glibc 2.35 floor), `tools/release_package_appimage.sh` |
+| `CaseZeroRecomp-linux-x86_64.tar.zst` / `.AppImage` | `b3895ad` (rebuilt 2026-10-14) | `tools/release_build_oldbase.sh` (Ubuntu 22.04 container, glibc 2.35 floor), `tools/release_package_appimage.sh` |
 | `CaseZeroRecomp-steamdeck-x86_64.tar.gz` | `a0e4f35` | `tools/release_build_steamdeck.sh` (`CZ_DECK`: no launcher, 1280x800, detail settings at 1.0) |
-| `CaseZeroRecomp-windows-x86_64.zip` | `9191cb0` | `tools/release_package_windows.ps1` on Windows, `docs/windows-build-setup.md` |
-| `CaseZeroRecomp-macos-arm64.zip` | `bcaed0d` | `tools/release_package_macos.sh` on an Apple Silicon Mac, `docs/macos-build-setup.md` |
+| `CaseZeroRecomp-windows-x86_64.zip` | `b3895ad` (rebuilt 2026-10-14) | `tools/release_package_windows.ps1` on Windows, `docs/windows-build-setup.md` |
+| `CaseZeroRecomp-macos-arm64.zip` | `b3895ad` (rebuilt 2026-10-14) | `tools/release_package_macos.sh` on an Apple Silicon Mac, `docs/macos-build-setup.md` |
 
-The commits after `a0e4f35` change nothing on Linux (the DPI fix and the macOS changes
-compile to nothing there), which is why the Linux legs were not rebuilt.
+The Steam Deck artifact was not rebuilt: its WORLD DETAIL default was already 1.0.
 
 **The state of the game:** completable start to finish, solo and in two-player online
 co-op (XenonLive), on Windows and Linux; the Steam Deck build and the macOS build are

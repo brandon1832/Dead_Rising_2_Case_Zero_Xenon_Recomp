@@ -1,14 +1,11 @@
 # Release notes — v1.1.3
 
-**PUBLISHED (2026-10-14T05:12:20Z) — THE FINAL RELEASE OF THE PROJECT.** Binaries are master at `a0e4f35`, built
-2026-10-13, all four legs: Linux tarball + AppImage (old base, glibc 2.35 floor), Steam
-Deck (`CZ_DECK` defaults: ZOMBIE/WORLD DETAIL 1.0), Windows (czwin). XenonLive `134d49b` /
-launcher overlay `e59d3ed` on BOTH platforms. **The macOS zip is from `bcaed0d`** (first macOS artifact: `tools/release_package_macos.sh`
-on czmac, ad-hoc signed, first-run flow gated from a fresh unzip with the bundled
-MoltenVK only, title screen rendered; operator-tested windowed on the M1).
-**The Windows zip is from `9191cb0`** (the DPI-awareness fix, Windows-only code; the
-Linux and Deck legs are from `a0e4f35` — the function is empty off Windows). Gate results and hashes are filled in below
-as each leg passes.
+**PUBLISHED 2026-10-14; non-Deck artifacts rebuilt 2026-10-14 from `b3895ad`.** Tag
+`v1.1.3` is on the rebuild. Linux tarball + AppImage (old base, glibc 2.35 floor),
+Windows (czwin) and macOS (czmac) now default WORLD DETAIL to 1.0. The Steam Deck build
+already used 1.0 and its archive is unchanged. XenonLive `134d49b` / launcher overlay
+`e59d3ed` remain on the Windows build; macOS is ad-hoc signed and passed the staged
+`--smoke` gate. All replacement artifact hashes are recorded below.
 
 **Gates, 2026-10-13:** Linux release `.text` byte-identical to its matched RelWithDebInfo
 build (old-base toolchain); tarball and AppImage GATE PASSED in `ubuntu:22.04` (glibc 2.35
@@ -155,8 +152,8 @@ too and appears to be the original game's behaviour.
 
 | file | sha256 |
 |---|---|
-| `CaseZeroRecomp-linux-x86_64.tar.zst` | `163683934e124eb276257ee2edfe40f189d5af0460e734cf4b9834f09c207eb8` |
-| `CaseZeroRecomp-linux-x86_64.AppImage` | `ab1a655aaa151128bad4ffe23b25b6a8e68423e2dfc2712cd07ee5ffa77e394c` |
+| `CaseZeroRecomp-linux-x86_64.tar.zst` | `36bbed757b83f266434299d8cbaf32b4bfab5331b4a7e1ced3d34ab633cd8bf8` |
+| `CaseZeroRecomp-linux-x86_64.AppImage` | `6ec1d521258201b22ff373b384caec35bb85d100540e7150cb3f11c73230aacf` |
 | `CaseZeroRecomp-steamdeck-x86_64.tar.gz` | `72bf4773a267a963d92f424529b3a2d237f4deeb89244a10b88e2523e4d1613b` |
-| `CaseZeroRecomp-macos-arm64.zip` | `6058ac9dff3ca79119425c0e784ce4ffeae1590d6512981bdd4d749a852d97f7` |
-| `CaseZeroRecomp-windows-x86_64.zip` | `03a4f01279a06a3454eed41eee2a71109c1bc26abb018f428696a53f2c2b2e79` |
+| `CaseZeroRecomp-macos-arm64.zip` | `79cf10630afca24d5443cb91adcc9aad793fde8986a7e3baa4c630b9e86f62db` |
+| `CaseZeroRecomp-windows-x86_64.zip` | `f821dd717c08baa83b06ae11ece1963835bbe07816b43a52792f3040cfd99a28` |
