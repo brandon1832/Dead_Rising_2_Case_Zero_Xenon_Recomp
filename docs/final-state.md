@@ -34,10 +34,12 @@ ultrawide, keyboard and mouse, MSAA, the three v1.1.3 detail settings.
 2. **The patched recompilers.** `patches/README.md`: the 14 XenonRecomp and 23
    XenosRecomp patches, exported from the maintainer's checkouts, with the upstream base
    commit each applies to. Without them the generated code and the shaders are wrong.
-3. **XenonLive — the blocker.** `runtime/CMakeLists.txt` requires a XenonLive checkout
-   at configure time, and that repository (`wivi514/XenonLive`) is **private**. Without
-   access, the first thing to do is make it optional (`patches/README.md` says where the
-   seams are). Nobody has built the runtime without it.
+3. **XenonLive and XenonLive_Launcher** (both public: `wivi514/XenonLive`,
+   `wivi514/XenonLive_Launcher`), cloned beside this repository. `runtime/CMakeLists.txt`
+   requires the XenonLive checkout at configure time; the launcher repo supplies the
+   in-game overlay. v1.1.3 was built with `134d49b` / `e59d3ed`. (The CI workflow still
+   clones XenonLive over a deploy key and its comments call it private; that predates
+   the repository going public.)
 4. Then the build order in `CLAUDE.md` (Commands): unpack, `ppc/` from
    `config/CaseZero.toml`, the shader cache (the runtime builds it itself on first run),
    cmake.

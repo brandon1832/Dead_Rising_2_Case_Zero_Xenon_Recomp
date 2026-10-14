@@ -34,11 +34,13 @@ paths were excluded from the export, so the patches carry source only.
 What each patch is for: `docs/xenonrecomp-upstream-bugs.md`, and the commit message of
 each patch.
 
-**XenonLive is NOT here, and the build needs it.** The online layer (`libxlive`, and the
-launcher's in-game overlay) comes from the separate XenonLive repository
-(`wivi514/XenonLive`), which was **private** when the project ended.
-`runtime/CMakeLists.txt` requires a checkout at `XLIVE_ROOT` at configure time (line
-~489), so without access to it the runtime does not configure. Anyone continuing the
-port without XenonLive has to make that dependency optional first: the co-op and account
-code sits behind `CZ_XLIVE_*` switches and `kernel/xlive_*glue.cpp`, but compiling it out
-was never done or tested.
+**XenonLive is not in this directory, and the build needs it.** The online layer
+(`libxlive`, and the launcher's in-game overlay) comes from two separate public
+repositories, cloned as siblings like the recompilers:
+
+```
+git clone https://github.com/wivi514/XenonLive           # XLIVE_ROOT, required at configure time
+git clone https://github.com/wivi514/XenonLive_Launcher  # XLIVE_LAUNCHER_ROOT, the overlay (optional)
+```
+
+The released v1.1.3 was built with XenonLive `134d49b` and XenonLive_Launcher `e59d3ed`.

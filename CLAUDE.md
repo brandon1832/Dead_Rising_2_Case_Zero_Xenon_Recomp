@@ -5,7 +5,7 @@
 > `docs/final-state.md` first** — it is the hand-off: what shipped (five downloads, tag
 > `v1.1.3` = `51df8c7`, each built from which commit), what is open and where each
 > record lives, and what a successor needs to build (the recompiler patches now in
-> `patches/`, and the PRIVATE XenonLive dependency, which the build requires). Everything
+> `patches/`, and the XenonLive + XenonLive_Launcher checkouts, both public). Everything
 > below is the development journal as it stood, including "live" pointers and owed
 > items that will now never be picked up by this maintainer. The machines it names
 > (`czwin`, `czmac`, `czamd`) were personal hardware, and "operator" means the
