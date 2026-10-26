@@ -177,8 +177,12 @@ PPC_FUNC(sub_8246BF48)
     __imp__sub_8246BF48(ctx, base);
 }
 
+void PropTrace_OnDef(uint32_t def);   // prop_trace.cpp
+
 PPC_FUNC(sub_82375518)
 {
+    if (ctx.r4.u32 == 0x82046A60)   // "LoadDistance": this is an item def
+        PropTrace_OnDef(ctx.r3.u32);
     static const bool on = getenv("CZ_FOV_PROP_TRACE") != nullptr;
     // CZ_PROP_TRACE_ALL=1 — the FULL registered-property census (part 93). The same
     // universal binder that carries FOV_Min/Max/Default/Rate carries every named
