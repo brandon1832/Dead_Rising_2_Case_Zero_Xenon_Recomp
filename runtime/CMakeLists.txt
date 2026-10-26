@@ -370,6 +370,7 @@ add_executable(cz_runtime
     cpu/shader_pool.cpp              # 2026-10-12: the shader constant set pool grown for mods (CZ_NO_SHADER_POOL_GROWTH)
     cpu/heap_census.cpp              # 2026-10-25: CZ_HEAP_CENSUS=1, every heap's size/free/largest + streamer + audio sample failures
     cpu/prop_trace.cpp               # 2026-10-25: CZ_PROP_TRACE=1, dynamic prop IDs allocated/freed with item names
+    cpu/volume_trace.cpp             # 2026-10-25: CZ_VOLUME_TRACE=1 / CZ_SW_FILE_LOG=1, the store-shelf instrument
     cpu/occluders.cpp                # 2026-10-25: CZ_NO_OCCLUDERS=1, zones load with zero occluders (store culling test)
     cpu/item_distance.cpp            # 2026-10-25: CZ_ITEM_DISTANCE=F, every item def's LoadDistance x F
     cpu/heap_growth.cpp              # 2026-10-25: opt-in CZ_MAIN_BLOCK/SW_TEXTURE/AUDIO_MAIN/AUDIO_BANK_GROW_MB
