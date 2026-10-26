@@ -70,10 +70,20 @@ PPC_FUNC(sub_82175040)
                             "%.1f m is raised to it (CZ_DETAIL_MIN_SWITCH)\n", v);
         return v > 0.0f && v <= 100.0f ? v : 0.0f;
     }();
+    // Only volumes authored at or below this are raised (default 2 m: the shop products
+    // and small props, ~60 in the level). Raising the 5 m shop interiors too (300+
+    // volumes) measured 2.2% (6 m) / 17% (8 m) of streamer checks in low memory on the
+    // operator's run, against 0% without the floor. CZ_DETAIL_MIN_FROM=5 widens it.
+    static const float minFrom = [] {
+        const char* e = getenv("CZ_DETAIL_MIN_FROM");
+        const float v = e ? float(atof(e)) : 2.0f;
+        return v > 0.0f ? v : 2.0f;
+    }();
     if (minSwitch > 0.0f && zone && idx < PPC_LOAD_U32(zone + 0x120))
     {
         const uint32_t vol = PPC_LOAD_U32(zone + 0x124) + idx * 0xD0;
-        if (F(base, vol + 0xA8) < minSwitch)
+        const float raw = F(base, vol + 0xA8);
+        if (raw < minSwitch && raw <= minFrom + 0.001f)
         {
             uint32_t b;
             memcpy(&b, &minSwitch, 4);
