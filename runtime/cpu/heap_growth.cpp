@@ -38,6 +38,7 @@
 extern "C" PPC_FUNC(__imp__sub_825D2688);
 extern "C" PPC_FUNC(__imp__sub_82483888);
 extern "C" PPC_FUNC(__imp__sub_8277BF48);
+extern "C" PPC_FUNC(__imp__sub_8277F0B8);
 
 namespace
 {
@@ -67,10 +68,86 @@ uint32_t HeapGrowth_SwTexture()
     return g;
 }
 
-uint32_t HeapGrowth_AudioBank()
+// BLOCK/HEAP PAIRS. A sub-heap is a block taken from its parent with sub_8277F0B8(size,
+// align, parent, flags) followed by sub_8277DD40(block, size, name, parent) at fixed call
+// sites. Both calls grow by the same amount or neither does: the heap is only made bigger
+// when the bigger block was really granted, and a refused bigger block falls back to the
+// title's own size (with a log line naming the knob to raise).
+//   * the audio store's banks ("Zombie Voice", "Zombiance", "Footstep", "Survivor Grunt"),
+//     in the Audio Main heap: CZ_AUDIO_BANK_GROW_MB, each sized bank.
+//   * the "Streaming world heap" (heap 65, 25.8 MB, made once in sub_8242DEA8 from heap 0):
+//     CZ_STREAMING_WORLD_GROW_MB.
+//   * the "Prop audio heap" (heap 73, 6 MB, the per-level size sub_82373538 returns,
+//     made in sub_82435488 in the Streaming world heap): CZ_PROP_AUDIO_GROW_MB. Its
+//     failures are the "Out of Audio Sample Memory" messages at high item distances
+//     (measured: every audio failure in both of the operator's max-detail runs was here),
+//     and it needs CZ_STREAMING_WORLD_GROW_MB at least as big.
+namespace
 {
-    static const uint32_t g = Mb("CZ_AUDIO_BANK_GROW_MB", 64);
-    return g;
+struct Pair
+{
+    uint32_t blockReturn, heapReturn;
+    const char* knob;
+    const char* name;
+    uint32_t grow;
+};
+Pair g_pairs[] = {
+    {0x8275E2F8, 0x8275E314, "CZ_AUDIO_BANK_GROW_MB", "audio bank", 0},
+    {0x8242E20C, 0x8242E234, "CZ_STREAMING_WORLD_GROW_MB", "Streaming world", 0},
+    {0x82435518, 0x82435538, "CZ_PROP_AUDIO_GROW_MB", "Prop audio", 0},
+};
+bool g_pairsRead = false;
+thread_local const Pair* t_grown = nullptr;
+
+void ReadPairs()
+{
+    if (g_pairsRead)
+        return;
+    for (Pair& p : g_pairs)
+        p.grow = Mb(p.knob, 64);
+    g_pairsRead = true;
+}
+}   // namespace
+
+bool HeapGrowth_PairBlock(PPCContext& ctx, uint8_t* base)
+{
+    ReadPairs();
+    const Pair* p = nullptr;
+    for (const Pair& q : g_pairs)
+        if (ctx.lr == q.blockReturn)
+            p = &q;
+    if (!p)
+        return false;
+    t_grown = nullptr;
+    if (!p->grow || !ctx.r3.u32)
+        return false;   // the caller runs the title's own call
+    const PPCContext saved = ctx;
+    const uint32_t want = ctx.r3.u32;
+    ctx.r3.u64 = want + p->grow;
+    __imp__sub_8277F0B8(ctx, base);
+    if (ctx.r3.u32)
+    {
+        t_grown = p;
+        return true;
+    }
+    fprintf(stderr, "[heapgrow] %s block %u + %u MiB did not fit in its parent heap %u; keeping "
+                    "%u (the parent needs more room)\n",
+            p->name, want, p->grow >> 20, saved.r5.u32, want);
+    ctx = saved;
+    __imp__sub_8277F0B8(ctx, base);
+    return true;
+}
+
+void HeapGrowth_PairHeap(PPCContext& ctx)
+{
+    const Pair* p = t_grown;
+    if (!p || ctx.lr != p->heapReturn)
+        return;
+    t_grown = nullptr;
+    const uint32_t was = ctx.r4.u32;
+    ctx.r4.u64 = was + p->grow;
+    fprintf(stderr, "[heapgrow] %s heap: %u -> %u bytes (%s=%u)\n", p->name, was, ctx.r4.u32,
+            p->knob, p->grow >> 20);
 }
 
 // The title's one big physical block -> heap 0.
