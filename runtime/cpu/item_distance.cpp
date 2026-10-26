@@ -69,7 +69,7 @@ PPC_FUNC(sub_823E24D0)
         static std::set<std::pair<uint32_t, float>> seen;
         std::lock_guard<std::mutex> lk(mu);
         if (seen.size() < 200 && seen.emplace(lr, in).second)
-            fprintf(stderr, "[itemdist] caller %08X LoadDistance %.1f -> %.1f\n", lr, in,
-                    float(ctx.f1.f64));
+            fprintf(stderr, "[itemdist] caller %08X LoadDistance %.1f -> %.1f (caller r31 "
+                            "%08X)\n", lr, in, float(ctx.f1.f64), ctx.r31.u32);
     }
 }
