@@ -1,3 +1,5 @@
+> **This is a fork: the heap-growth build.** It gives the game more streaming and audio memory so that WORLD DETAIL 4.0 / ZOMBIE DETAIL 5.0 play without pop-in or missing sounds, and loads items from farther away. **[HEAP-BUILD.md](HEAP-BUILD.md)** describes the changes, settings and measurements; the AppImage is on the Releases page. Everything below is the original project's README. Original: [wivi514/Dead_Rising_2_Case_Zero_Xenon_Recomp](https://github.com/wivi514/Dead_Rising_2_Case_Zero_Xenon_Recomp).
+
 # Dead Rising 2: Case Zero — Native PC Port
 
 **To play with online feature download it from the [XenonLive launcher](https://github.com/wivi514/XenonLive_Launcher)**
