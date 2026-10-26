@@ -37,11 +37,14 @@
 
 extern "C" PPC_FUNC(__imp__sub_825D2688);
 extern "C" PPC_FUNC(__imp__sub_82483888);
+extern "C" PPC_FUNC(__imp__sub_8277BF48);
 
 namespace
 {
 constexpr uint32_t kTitleMainBlock = 0x1BF16000;
 constexpr uint32_t kMainBlockReturn = 0x82496DC4;   // after "bl sub_825D2688"
+constexpr uint32_t kHeap0InitReturn = 0x82496DD4;   // after "bl sub_8277BF48" (heap 0 init)
+uint32_t g_mainGrown = 0;   // the block really is this much bigger
 
 uint32_t Mb(const char* name, long maxMb)
 {
@@ -84,6 +87,7 @@ PPC_FUNC(sub_825D2688)
     __imp__sub_825D2688(ctx, base);
     if (ctx.r3.u32)
     {
+        g_mainGrown = g;
         fprintf(stderr, "[heapgrow] main block (heap 0): %u -> %u bytes at %08X "
                         "(CZ_MAIN_BLOCK_GROW_MB=%u)\n",
                 kTitleMainBlock, kTitleMainBlock + g, ctx.r3.u32, g >> 20);
@@ -93,6 +97,19 @@ PPC_FUNC(sub_825D2688)
                     "taking the title's %u\n", kTitleMainBlock + g, kTitleMainBlock);
     ctx = saved;
     __imp__sub_825D2688(ctx, base);
+}
+
+// Heap 0's init. The title passes the size from the register it asked with, NOT from the
+// allocation, so without this the extra bytes are allocated and never handed to heap 0
+// (measured: heap 0 stayed 468,803,584 with the block 32 MiB bigger).
+PPC_FUNC(sub_8277BF48)
+{
+    if (g_mainGrown && ctx.lr == kHeap0InitReturn && ctx.r4.u32 == kTitleMainBlock)
+    {
+        ctx.r4.u64 = kTitleMainBlock + g_mainGrown;
+        fprintf(stderr, "[heapgrow] heap 0 initialised over %u bytes\n", ctx.r4.u32);
+    }
+    __imp__sub_8277BF48(ctx, base);
 }
 
 // The Audio Main heap's size, less its fixed 24 MB.
