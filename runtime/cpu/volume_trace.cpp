@@ -17,6 +17,7 @@
 // It logs a line whenever a volume's answer or load state changes, never per frame.
 // CZ_SW_FILE_LOG=1 also switches on the title's own "[SW-FileEvent] (time) ..." log
 // (EnableStreamingWorldFileEventLog, 0x82A57BD9; printed through CZ_GUEST_LOG=1).
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -54,6 +55,36 @@ PPC_FUNC(sub_82175040)
     if (swlog)
         PPC_STORE_U8(0x82A57BD9, 1);
     const uint32_t zone = ctx.r3.u32, idx = ctx.r4.u32;
+    // DETAIL FLOOR (CZ_DETAIL_MIN_SWITCH=M, metres). The store's products are volumes
+    // with a 2 m switch distance (z08_orangejuice, z08_motoroil, z08_ketchup ...) and
+    // shop interiors use 2-5 m, so even WORLD DETAIL 4.0 flips them to their far version
+    // (the empty shelf) 8 m away. Any volume authored below M is raised to M before the
+    // vote reads it; WORLD DETAIL then multiplies as usual. Written into the volume once
+    // (idempotent, so a concurrent voter seeing it early is harmless); a zone reload
+    // re-reads the title's value and the next vote raises it again.
+    static const float minSwitch = [] {
+        const char* e = getenv("CZ_DETAIL_MIN_SWITCH");
+        const float v = e ? float(atof(e)) : 0.0f;
+        if (v > 0.0f)
+            fprintf(stderr, "[volume] detail floor: every scenery switch distance below "
+                            "%.1f m is raised to it (CZ_DETAIL_MIN_SWITCH)\n", v);
+        return v > 0.0f && v <= 100.0f ? v : 0.0f;
+    }();
+    if (minSwitch > 0.0f && zone && idx < PPC_LOAD_U32(zone + 0x120))
+    {
+        const uint32_t vol = PPC_LOAD_U32(zone + 0x124) + idx * 0xD0;
+        if (F(base, vol + 0xA8) < minSwitch)
+        {
+            uint32_t b;
+            memcpy(&b, &minSwitch, 4);
+            PPC_STORE_U32(vol + 0xA8, b);
+            static std::atomic<uint32_t> raised{0};
+            const uint32_t n = ++raised;
+            if (n == 1 || n % 100 == 0)
+                fprintf(stderr, "[volume] detail floor: %u scenery switch distances raised "
+                                "to %.1f m so far\n", n, minSwitch);
+        }
+    }
     __imp__sub_82175040(ctx, base);
     if (!trace || !zone || idx >= 4096)
         return;
