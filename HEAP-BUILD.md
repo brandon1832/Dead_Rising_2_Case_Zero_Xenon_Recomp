@@ -69,4 +69,10 @@ The **general store** still empties some shelves as you walk around inside, for 
 
 ## Install
 
-Put `CaseZeroRecomp-heap-linux-x86_64.appimage` in the same folder as your existing Case Zero data (the folder with `assets/`) and run it. It uses your existing saves and settings. The system's libstdc++ is used, so no `LD_PRELOAD` is needed.
+**New install (same as the original project):**
+1. Download `CaseZeroRecomp-heap-linux-x86_64.appimage` from the Releases page, put it in a folder of its own, and make it executable (`chmod +x`, or Properties → "Allow executing as program").
+2. Run it. The launcher opens, and the AppImage creates an `assets/package/` folder next to itself.
+3. Add your copy of the game: drag the ~825 MB XBLA package file onto the launcher window, or copy it into `assets/package/`.
+4. Run it again. The first run unpacks the game and prepares the shaders under a progress bar; after that it goes straight into the game.
+
+**Already have the original v1.1.3 AppImage set up?** Put this AppImage in the same folder as the original (the one with `assets/`) and run it instead. It reuses the game files that are already unpacked, plus your saves and settings, so there is no setup. If your launch script sets `LD_PRELOAD` to the system libstdc++ (a workaround for the original AppImage's older bundled copy), you can remove it: this build uses the system's libstdc++ directly.
