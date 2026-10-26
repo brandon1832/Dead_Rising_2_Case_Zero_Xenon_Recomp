@@ -64,10 +64,26 @@ bool g_textureShrunk = false;   // the bytes the Zombie heap takes were freed
 bool g_blockGrown = false;      // this level's Zombie heap block was asked bigger
 }   // namespace
 
-// The SW Texture heap's size: GROWTH less.
+uint32_t HeapGrowth_SwTexture();   // heap_growth.cpp
+uint32_t HeapGrowth_AudioBank();
+void SwTextureShare(PPCContext& ctx);
+
+// The SW Texture heap's size: GROWTH less, then CZ_SW_TEXTURE_GROW_MB more.
 PPC_FUNC(sub_82483860)
 {
     __imp__sub_82483860(ctx, base);
+    SwTextureShare(ctx);
+    if (const uint32_t extra = HeapGrowth_SwTexture())
+    {
+        const uint32_t was = ctx.r3.u32;
+        ctx.r3.u64 = was + extra;
+        fprintf(stderr, "[heapgrow] SW Texture heap: %u -> %u bytes (CZ_SW_TEXTURE_GROW_MB=%u)\n",
+                was, ctx.r3.u32, extra >> 20);
+    }
+}
+
+void SwTextureShare(PPCContext& ctx)
+{
     const uint32_t g = Growth();
     if (!g)
         return;
@@ -84,9 +100,39 @@ PPC_FUNC(sub_82483860)
                     "CZ_NO_ZOMBIE_HEAP_GROWTH=1 keeps both)\n", was, ctx.r3.u32, g >> 20);
 }
 
-// The Zombie heap's block, from heap 0.
+// The audio store's bank sub-heaps (heap_growth.cpp): block from the Audio Main heap,
+// then the heap in it, both CZ_AUDIO_BANK_GROW_MB bigger or neither.
+constexpr uint32_t kBankBlockReturn = 0x8275E2F8;
+constexpr uint32_t kBankHeapReturn = 0x8275E314;
+thread_local bool t_bankGrown = false;
+
+// The Zombie heap's block, from heap 0 (and the audio banks' blocks).
 PPC_FUNC(sub_8277F0B8)
 {
+    if (ctx.lr == kBankBlockReturn)
+    {
+        t_bankGrown = false;
+        const uint32_t g = HeapGrowth_AudioBank();
+        if (!g || !ctx.r3.u32)
+        {
+            __imp__sub_8277F0B8(ctx, base);
+            return;
+        }
+        const PPCContext saved = ctx;
+        const uint32_t want = ctx.r3.u32;
+        ctx.r3.u64 = want + g;
+        __imp__sub_8277F0B8(ctx, base);
+        if (ctx.r3.u32)
+        {
+            t_bankGrown = true;
+            return;
+        }
+        fprintf(stderr, "[heapgrow] audio bank block %u + %u MiB did not fit in the Audio Main "
+                        "heap; keeping %u (raise CZ_AUDIO_MAIN_GROW_MB)\n", want, g >> 20, want);
+        ctx = saved;
+        __imp__sub_8277F0B8(ctx, base);
+        return;
+    }
     const bool zombieBlock = ctx.lr == kBlockReturn;   // read now: the callee changes lr
     if (zombieBlock)
     {
@@ -103,9 +149,14 @@ PPC_FUNC(sub_8277F0B8)
                         "heap 0\n", kTitleZombieHeap + Growth());
 }
 
+void HeapCensus_OnCreate(uint8_t* base, uint32_t lr, uint32_t heapBase, uint32_t size,
+                         uint32_t name, uint32_t parent, int32_t id);   // heap_census.cpp
+
 // The Zombie heap itself, in that block: the same size as the block.
 PPC_FUNC(sub_8277DD40)
 {
+    const uint32_t lr = ctx.lr;
+    const uint32_t a3 = ctx.r3.u32, a5 = ctx.r5.u32, a6 = ctx.r6.u32;
     if (ctx.lr == kHeapReturn && g_blockGrown && ctx.r4.u32 == kTitleZombieHeap)
     {
         ctx.r4.u64 = kTitleZombieHeap + Growth();
@@ -115,5 +166,15 @@ PPC_FUNC(sub_8277DD40)
                             "zombie types at once)\n", kTitleZombieHeap, ctx.r4.u32);
         logged = true;
     }
+    if (ctx.lr == kBankHeapReturn && t_bankGrown)
+    {
+        t_bankGrown = false;
+        const uint32_t was = ctx.r4.u32;
+        ctx.r4.u64 = was + HeapGrowth_AudioBank();
+        fprintf(stderr, "[heapgrow] audio bank heap: %u -> %u bytes (CZ_AUDIO_BANK_GROW_MB=%u)\n",
+                was, ctx.r4.u32, HeapGrowth_AudioBank() >> 20);
+    }
+    const uint32_t a4 = ctx.r4.u32;
     __imp__sub_8277DD40(ctx, base);
+    HeapCensus_OnCreate(base, lr, a3, a4, a5, a6, int32_t(ctx.r3.u32));
 }
