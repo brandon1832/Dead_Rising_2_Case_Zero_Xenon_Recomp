@@ -1,6 +1,6 @@
 # Case Zero Recomp: heap-growth build
 
-A fork of [Dead Rising 2: Case Zero Xenon Recomp](https://github.com/wivi514/Dead_Rising_2_Case_Zero_Xenon_Recomp) v1.1.3 that gives the game more memory for its streaming and audio heaps, so that **WORLD DETAIL 4.0 / ZOMBIE DETAIL 5.0** play without the pop-in and missing sounds the stock build has at those settings. It also adds a setting that loads items from farther away.
+A fork of [Dead Rising 2: Case Zero Xenon Recomp](https://github.com/wivi514/Dead_Rising_2_Case_Zero_Xenon_Recomp) v1.1.3 that gives the game more memory for its streaming and audio heaps, so that **WORLD DETAIL 4.0 / ZOMBIE DETAIL 5.0** play without the pop-in and missing sounds the stock build has at those settings. It also adds a setting that loads items from farther away. (NOTE, this build is only really good for pcs that can handle the highest quality settings on the port itself, allowing the higher quality zombies, items, and props the extra memory to load in without others disappearing. If you're playing on windows (There is no windows version of this fork), steam deck, or a lower end pc, I would recommend just using the original instead of this fork.)
 
 Everything is on by default in the AppImage and can be overridden from the environment. Unset everything (or use the stock v1.1.3 release) to get the original behaviour.
 
